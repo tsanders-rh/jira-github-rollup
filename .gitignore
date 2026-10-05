@@ -1,0 +1,28 @@
+# macOS
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*~
+
+# Claude Code local state
+.claude/settings.local.json
+
+# Scratch output — rollup drafts and API dumps may contain
+# issue titles or links from private repositories. Keep them out of git.
+scratch/
+*.local.md
+rollups/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
