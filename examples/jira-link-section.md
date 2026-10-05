@@ -62,6 +62,45 @@ Using both is fine — the skill de-duplicates.
 | A link to a PR instead of the epic | Rolls up one PR, not the requirement. |
 | Only an epic title, no link | The skill stops and asks. It will not search by title. |
 
+## Acceptance criteria
+
+The rollup also reports, criterion by criterion, what upstream evidence exists
+for each acceptance criterion on the requirement. That only works if the Jira
+states its criteria explicitly — the skill quotes what is there and never writes
+a criterion of its own.
+
+It reads, in this order: a description section headed `Acceptance Criteria`,
+`Success Criteria`, or `Definition of Done`; a dedicated acceptance-criteria
+custom field if the site has one; `Given / When / Then` blocks; and the same
+three on sub-tasks and child requirements, one level down.
+
+```
+h2. Acceptance Criteria
+
+# Requests for a tiered model are routed to the serving pool configured for that tier.
+# An unknown tier is rejected with HTTP 400, and tier configuration changes take effect without a gateway restart.
+# Routing decisions, including denials, are recorded in the metering stream within 60 seconds.
+# Streaming responses are subject to the same tier enforcement as non-streaming responses.
+```
+
+One checkable statement per item. The skill assigns IDs by order of appearance
+(`AC1`, `AC2`, …) and records which issue each came from, so a criterion
+inherited from a child requirement is attributed to that child.
+[`sample-rollup.md`](sample-rollup.md) shows what these four come back as.
+
+Two things make criteria usable:
+
+- **Checkable wording.** "Rejected with HTTP 400" can be matched against a PR
+  and a test. "Performance should be acceptable" cannot — the skill keeps it
+  verbatim, reports `Unable to assess`, and asks for a restatement.
+- **One behavior per criterion.** Item 2 above has two clauses, and in
+  `sample-rollup.md` it comes back `Partial evidence` — the rejection path has a
+  test, the reload path has nothing. Upstream work tends to land one clause at a
+  time, so a compound criterion tends to sit at partial for a long while.
+
+If the issue has no criteria at all, the rollup says so and names where it
+looked. It does not fall back to inferring criteria from the description.
+
 ## On the GitHub side
 
 For the traversal to find anything, the epic needs children expressed in a way

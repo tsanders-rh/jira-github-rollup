@@ -1,7 +1,8 @@
 # Rollup format
 
 The output contract for a drafted rollup. Structure is fixed; length is not — but
-shorter is better. Target 15–30 lines of body text.
+shorter is better. Target 15–30 lines of body text, plus one row per acceptance
+criterion.
 
 ## Audience and tone
 
@@ -25,8 +26,9 @@ h3. Upstream Development Rollup
 *Generated:* <YYYY-MM-DD>
 
 *Summary*
-<One to three sentences. What is the state of this requirement upstream, and
- what is the single most important thing a reader should know.>
+<Two to five sentences. What is the state of this requirement upstream, what is
+ the single most important thing a reader should know, and which acceptance
+ criteria are materially uncovered or unassessable.>
 
 *Progress*
 <N of M> child issues closed; <P> pull requests merged.
@@ -34,6 +36,19 @@ h3. Upstream Development Rollup
 | org/repo#12 — <title> | Closed | org/repo#45 (merged 2026-09-30) |
 | org/repo#13 — <title> | Open | org/repo#51 (open, 9d) |
 | other-org/other-repo#7 — <title> | Open | — |
+
+*Acceptance criteria coverage*
+|| Criterion || Evidence || Evidence state || Coverage || Gap / next validation step ||
+| AC1 (RHOAIENG-1234) "<verbatim criterion text>" | org/repo#413, org/repo#520 (merged 2026-09-18) | merged | Evidence found — <what the evidence establishes> | <what remains, or "—"> |
+| AC1 (RHOAIENG-1240) "<verbatim criterion text>" | org/repo#88 (open) | planned | No evidence found — mapped issue is open; no implementation in the sources inspected | <next step> |
+
+*Downstream qualification*
+- AC1 (RHOAIENG-1234) — <what is still required downstream, or that downstream
+  state was not inspected>
+
+*Coverage caveats*
+- <Inaccessible sources, truncated traversal, missing or ambiguous criteria,
+  criteria with no upstream mapping. Omit the section only when there are none.>
 
 *Risks and blockers*
 - <Only real, evidenced items. Omit the whole section if there are none —
@@ -49,14 +64,30 @@ GitHub; no Jira issues were created._
 
 ## Notes on each section
 
-**Status** — one word, derived from the evidence table in `SKILL.md` step 5.
+**Status** — one word, derived from the evidence table in `SKILL.md` step 7.
 `Blocked` requires a named blocker in the Risks section; do not use it loosely.
+`Complete` additionally requires every criterion at `Evidence found` with no
+downstream qualification outstanding.
 
 **Source epic** — list all epics if more than one was approved for inclusion.
 This is what makes the rollup auditable.
 
 **Summary** — the only part most readers will read. Lead with the state, not the
 history. If something is at risk, it goes in the first sentence.
+
+It must also carry the material coverage gaps — any criterion at `No evidence
+found` or `Partial evidence`, and any coverage that could not be assessed. Name
+the kind, because the follow-ups differ and the reader is deciding who to ask:
+
+| Kind | Phrase it as |
+| --- | --- |
+| Missing tracking | "No upstream work is linked for <criterion>." |
+| Unfinished implementation | "<criterion> is tracked in org/repo#88 but unimplemented." |
+| Downstream validation | "<criterion> landed upstream; downstream qualification is pending." |
+
+If a source was inaccessible, the Summary says coverage is incomplete and why.
+Burying that below the table makes the rest of the section read as authoritative
+when it is not.
 
 **Progress** — the counts line is required; the table is required when there are
 1–15 children. Above 15, drop the table and summarize by repo instead, listing
@@ -65,12 +96,82 @@ only children that are open or flagged.
 Use `—` for a child with no PRs. Mark PR age for open PRs (`open, 9d`) because
 that is the review-latency signal.
 
+**Acceptance criteria coverage** — one row per criterion from `SKILL.md` step 2,
+in the order they appear on the Jira: the named issue's criteria first, then each
+child requirement's. Required whenever criteria were found.
+
+Above 12 criteria the table stops being read, which is the same failure as a
+rollup longer than a screen. Keep every row that is not `Evidence found`, and
+collapse the rest into one line (`4 further criteria assessed Evidence found with
+no downstream step outstanding: AC2, AC5, AC7, AC9`). Never collapse a row with
+`Partial evidence`, `No evidence found`, `Unable to assess`, or an outstanding
+downstream step — those are the rows the section exists for.
+
+When no criteria were found, replace the table with a single line naming where
+you looked:
+
+```
+*Acceptance criteria coverage*
+No acceptance criteria found on RHOAIENG-1234 (description, acceptance-criteria
+field, sub-tasks). Nothing to assess coverage against.
+```
+
+Column by column:
+
+| Column | Contains |
+| --- | --- |
+| Criterion | `AC<n> (SOURCE-KEY)` then the criterion **in quotes, verbatim** |
+| Evidence | Issue and PR references with merge dates; `—` when nothing is mapped |
+| Evidence state | One of: planned, in progress, in review, merged, tested |
+| Coverage | One of the four assessments, an em dash, then what it rests on |
+| Gap / next validation step | What remains, and who or what resolves it |
+
+- The source key is **not** decoration. IDs are numbered per source issue, so a
+  table drawing on a parent and a child contains two rows labelled `AC1`. The key
+  is the only thing distinguishing them, and without it a reader holds the wrong
+  owner accountable.
+- Long criteria are quoted to a sentence boundary with a trailing `…`. Never
+  paraphrase to fit the column.
+- The Coverage cell is never bare. `Evidence found` alone is unverifiable;
+  `Evidence found — PR #520 adds tier-based pool selection and merged to main on
+  2026-09-18` can be checked.
+- Absence is scoped in the cell itself: "no evidence in
+  example-org/example-gateway#412 and its children," not "not implemented."
+- `Evidence state` is `—` when nothing is mapped. Do not write `planned` for a
+  criterion that has no upstream issue; that implies tracking that does not exist.
+
+**Downstream qualification** — one bullet per criterion that still needs
+downstream integration or qualification, including criteria whose upstream
+coverage is `Evidence found`. Merged upstream is not shipped downstream, and the
+reader needs the two separated.
+
+Close the section with the scope of the claim when it applies:
+
+```
+Criteria not listed above have no identified downstream step in the sources
+inspected; that is not confirmation that none is required.
+```
+
+Do not name a downstream owner, build, or date that the sources did not provide.
+
+**Coverage caveats** — this is where incomplete retrieval is admitted. Entries:
+
+- A repository or issue that returned 404 or was otherwise unreadable, by name
+- Truncated or unpaginated results, and what was therefore not checked
+- Criteria that are ambiguous as written, quoted, with the restatement request
+- Criteria with no upstream mapping, flagged for owner review
+
+Each caveat says what it prevents. "example-org/example-dlp is not readable from
+this account" is a fact; "so AC5 could not be assessed" is why the reader cares.
+
 **Risks and blockers** — evidenced items only. Typical entries:
 
 - A child open 30+ days with no linked PR
 - A PR open 14+ days with no review
 - A cross-repo dependency on a team that does not own this requirement
 - A child closed without a merged PR (state why, or state that it is unclear)
+- A criterion with no upstream mapping at all — that is a tracking gap, and it
+  belongs here as well as in the coverage table
 
 **Since last rollup** — delta against the prior rollup comment. Omit entirely on
 the first rollup.
@@ -98,3 +199,15 @@ the raw comment than piped links — prefer them for issue and PR references.
 If the target site runs the Atlassian Document Format editor, plain text with
 bare URLs renders acceptably; wiki markup does not. When unsure, prefer the plain
 structure and bare URLs over heavy markup.
+
+The coverage table is five columns wide and is the first thing to render badly on
+an ADF site or in a narrow comment pane. The fallback is one block per criterion,
+same fields, same order — never drop a field to make the table fit:
+
+```
+AC1 (RHOAIENG-1234) "Requests for a tiered model are routed to the pool for that tier."
+  Evidence: example-org/example-gateway#413, PR #520 (merged 2026-09-18)
+  State: merged
+  Coverage: Evidence found — PR #520 implements tier-based pool selection.
+  Gap: Downstream qualification pending.
+```
