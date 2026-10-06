@@ -26,55 +26,70 @@ Jira requirement  ──(human adds link)──▶  GitHub epic
 
 1. **A human** creates or identifies the GitHub epic for a requirement and links
    it from the Jira issue. This step stays manual — it is a judgment call, and
-   getting it wrong poisons every rollup that follows.
-2. **The skill** reads that link, follows child issues and their pull requests
-   across repositories, and drafts a concise status rollup.
+   getting it wrong poisons every rollup that follows. A requirement that spans
+   two upstream efforts gets two links, and both are rolled up.
+2. **The skill** reads those links, follows child issues and their pull requests
+   across repositories, and drafts a concise status rollup. With no link to
+   read, it drafts the Jira side and names what is missing.
 3. **A human** approves the draft before it is posted as a comment on that same
    Jira issue.
 
-### Acceptance-criteria coverage
+### Requirement coverage
 
 The rollup also answers the question progress counts cannot: *is the requirement
-actually covered?* It quotes each acceptance criterion from the Jira — including
-criteria inherited from child requirements — and reports, per criterion, the
-upstream evidence for it, how far that evidence got (planned, in progress, in
-review, merged, tested), and one of four assessments:
+actually covered?* It quotes each statement the Jira commits to — acceptance
+criteria, success criteria, and definition-of-done items, including those
+inherited from child requirements — and reports, per statement, the upstream
+evidence for it, how far that evidence got (planned, in progress, in review,
+merged, tested), and one of four assessments:
 
 | Assessment | Means |
 | --- | --- |
-| Evidence found | The evidence supports the criterion, and the row says what it establishes |
-| Partial evidence | Part of the criterion is covered; the rest is named |
+| Evidence found | The evidence supports the requirement, and the row says what it establishes |
+| Partial evidence | Part of it is covered; the rest is named |
 | No evidence found | The sources inspected do not establish coverage |
-| Unable to assess | Access failure, truncated results, or an ambiguous criterion |
+| Unable to assess | Access failure, truncated results, or nothing checkable in the statement |
 
 Whether downstream integration or qualification is still required is stated
 separately, because it can be outstanding even when upstream coverage is
 complete. A merged PR is landed implementation, not a shipped requirement.
 
-Two distinctions do most of the work here:
+Four distinctions do most of the work here:
 
 - **"No evidence found" is never "not implemented."** It is a claim about the
   sources inspected, and it is written scoped to them.
 - **A matching issue title is a candidate mapping, not coverage.** The issue has
-  to say so. When a criterion has no mapping at all, the skill flags it for owner
-  review rather than searching the org for something plausible.
+  to say so. When a requirement has no mapping at all, the skill flags it for
+  owner review rather than searching the org for something plausible.
+- **The three kinds of requirement stay apart.** `AC`, `SC`, and `DoD` are
+  numbered and counted separately. A total labelled "acceptance criteria" that
+  includes definition-of-done items misstates what was agreed and sends the
+  reader to the wrong person.
+- **One undecided parameter does not void a whole criterion.** "Retained for the
+  agreed window (TBD)" alongside two checkable clauses gets the two clauses
+  assessed and the open decision named, with its owner.
 
 See [`examples/sample-rollup.md`](examples/sample-rollup.md) for all four
-assessments in context, and
-[`examples/ac-coverage-fixture.md`](examples/ac-coverage-fixture.md) for the
-cases the rules are checked against.
+assessments in context — and, below them, the same requirement rolled up with no
+epic linked. [`examples/ac-coverage-fixture.md`](examples/ac-coverage-fixture.md)
+holds the cases the rules are desk-checked against.
 
 ### What it will not do
 
 - **It does not create Jira issues.** No mirroring, no sub-tasks, no linked
   issues. One Jira issue in, one comment out.
-- **It does not guess the epic.** No link on the Jira means it stops and asks.
-  A title-matched guess produces a rollup that is confidently wrong.
+- **It does not guess the epic.** A title-matched guess produces a rollup that is
+  confidently wrong. With no link on the Jira it drafts the half it can see — the
+  scope and the requirements table — marks upstream coverage unassessable, and
+  asks for the link.
+- **It does not read a missing link as missing work.** No link means nothing
+  upstream was inspected. The draft never says "not started".
 - **It does not post without approval.** A Jira comment is visible to the whole
-  project; that needs a human yes.
-- **It does not invent acceptance criteria, mappings, or test results.** Criteria
-  are quoted from the Jira or reported missing. Retrieval stays inside the linked
-  epic, its children, and dependencies those artifacts reference directly.
+  project; that needs a human yes, on that specific draft. Asking for a draft is
+  not asking for a post.
+- **It does not invent criteria, mappings, or test results.** Requirements are
+  quoted from the Jira or reported missing. Retrieval stays inside the linked
+  epics, their children, and dependencies those artifacts reference directly.
 
 ## Usage
 
@@ -85,9 +100,9 @@ From a Claude Code session with this repo's `.claude/` directory in scope:
 > are the acceptance criteria on RHOAIENG-1234 covered upstream?
 ```
 
-The skill will fetch the issue and its criteria, find the linked epic, traverse
-it, map each criterion to the evidence it found, and show you a draft. Nothing is
-written to Jira until you approve it.
+The skill will fetch the issue and its requirements, find the linked epics,
+traverse them, map each requirement to the evidence it found, and show you a
+draft. Nothing is written to Jira until you approve that draft.
 
 ## Requirements
 
@@ -98,8 +113,8 @@ written to Jira until you approve it.
 
 Both need read access to every repository that hosts child issues — including
 repos the epic itself does not live in. Where access is missing, the affected
-criteria come back `Unable to assess` and the gap is named in the rollup rather
-than quietly reducing coverage.
+requirements come back `Unable to assess` and the gap is named in the rollup
+rather than quietly reducing coverage.
 
 ## Layout
 

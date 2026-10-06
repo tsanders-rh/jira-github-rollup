@@ -1,6 +1,6 @@
 ---
 name: jira-github-rollup
-description: Use when asked to summarize, roll up, or report upstream GitHub development status for an existing Jira requirement, or to check whether its acceptance criteria are covered upstream (e.g. "roll up RHOAIENG-1234", "what's the upstream status of this epic", "draft a status update for this Jira", "are the acceptance criteria on RHOAIENG-1234 covered", "which requirements have no upstream evidence"). Reads GitHub epic links already present on the Jira issue, follows child issues and their pull requests across repositories, maps each acceptance criterion to the upstream evidence for it, and drafts a concise rollup for that same Jira issue. Read-only against GitHub; never creates mirrored Jira issues.
+description: Use when asked to summarize, roll up, or report upstream GitHub development status for an existing Jira requirement, or to check whether its acceptance criteria, success criteria, or definition of done are covered upstream (e.g. "roll up RHOAIENG-1234", "what's the upstream status of this epic", "draft a status update for this Jira", "are the acceptance criteria on RHOAIENG-1234 covered", "which requirements have no upstream evidence"). Reads the GitHub epic links already present on the Jira issue, follows child issues and their pull requests across repositories, maps each stated requirement to the upstream evidence for it, and drafts a concise rollup for that same Jira issue. Drafts a partial rollup when no upstream link exists. Read-only against GitHub; never creates mirrored Jira issues.
 ---
 
 # Jira ← GitHub Development Rollup
@@ -16,10 +16,9 @@ operation it may perform is adding or updating a comment (or a designated
 description section) on the **one** Jira issue the user named — and only after
 showing the draft and getting explicit approval.
 
-Acceptance-criteria analysis may **read** child Jira requirements, but that does
-not widen the write surface: the comment still goes on the one issue the user
-named, and nothing — not a comment, not a status transition — is written to the
-children.
+Coverage analysis may **read** child Jira requirements, but that does not widen
+the write surface: the comment still goes on the one issue the user named, and
+nothing — not a comment, not a status transition — is written to the children.
 
 If the user asks for mirrored Jira issues, say that this skill deliberately does
 not do that and offer the rollup instead.
@@ -37,10 +36,14 @@ The intended workflow is:
 Workflow steps 1 and 2 are **manual and stay manual.** This skill starts at
 workflow step 3 — which is the Procedure below, numbered separately.
 
-Acceptance-criteria coverage rides on the same premise: the criteria are
-whatever the Jira says they are, and the mapping between a criterion and
-upstream work is only as good as the links a human placed. The skill reports
-what the evidence supports and flags the rest for owner review.
+When workflow step 2 has not happened, the skill still runs: it reports the
+Jira side in full and says precisely what link would complete the assessment
+(step 9). What it never does is supply the missing link by guessing.
+
+Coverage analysis rides on the same premise: the requirements are whatever the
+Jira says they are, and the mapping between a requirement and upstream work is
+only as good as the links a human placed. The skill reports what the evidence
+supports and flags the rest for owner review.
 
 ## Procedure
 
@@ -60,57 +63,102 @@ differ per site, so do not hard-code one.
 
 If the user gave a URL rather than a key, extract the key from it.
 
-### 2. Extract the acceptance criteria
+### 2. Extract the stated requirements
 
-Collect the criteria this rollup will be judged against, **verbatim**. Look in
-this order and union the results:
+Collect the statements this rollup will be judged against, **verbatim**, and
+keep the type each one was stated under. Union these sources:
 
-1. A description section headed `Acceptance Criteria`, `Success Criteria`, or
-   `Definition of Done`.
-2. A dedicated acceptance-criteria custom field, if the site has one.
-3. Gherkin blocks (`Given / When / Then`) anywhere in the description.
-4. The same three sources on **child requirements** — sub-tasks, and issues
-   linked as a child of the named issue. One level only.
+| Source | Type recorded | ID prefix |
+| --- | --- | --- |
+| Description section headed `Acceptance Criteria` | Acceptance criterion | `AC` |
+| Description section headed `Success Criteria` | Success criterion | `SC` |
+| Description section headed `Definition of Done` | Definition-of-done item | `DoD` |
+| A dedicated acceptance-criteria custom field, if the site has one | Acceptance criterion | `AC` |
+| Gherkin blocks (`Given / When / Then`) anywhere in the description | The type of the section it sits under | that section's |
+| A Gherkin block or criteria list under no typed heading | Unlabelled requirement | `REQ` |
+
+Then repeat all of the above on **child requirements** — sub-tasks, and issues
+linked as a child of the named issue. One level only.
 
 Rules:
 
-- **Quote the criterion as written.** Do not normalize, shorten, or rephrase it.
+- **Quote the statement as written.** Do not normalize, shorten, or rephrase it.
   If it is too long for a table cell, quote verbatim to a sentence boundary and
   append `…` — never paraphrase.
-- Assign each one a stable ID in order of appearance, **scoped to its source
-  issue** and rendered `AC<n> (SOURCE-KEY)`. A parent and a child requirement
-  therefore both start at `AC1`, and the key is what tells the two rows apart.
-  A criterion inherited from a child is not the parent's criterion.
-- **Never synthesize a criterion.** Not from the summary, not from prose in the
+- Assign each one a stable ID in order of appearance, numbered **per type, per
+  source issue**, and rendered `<PREFIX><n> (SOURCE-KEY)`. A parent's acceptance
+  criteria and a child's therefore both start at `AC1`, and the key is what tells
+  the two rows apart. A criterion inherited from a child is not the parent's
+  criterion.
+- **Never merge the types.** An acceptance criterion, a success criterion, and a
+  definition-of-done item are different commitments made by different people, and
+  a reader acts on them differently. Preserve the heading each came from, carry
+  its prefix in every reference, and **never report a combined count as a number
+  of acceptance criteria.** Count by type ("three acceptance criteria, two
+  definition-of-done items") or use the neutral word "requirements".
+- **Never synthesize a requirement.** Not from the summary, not from prose in the
   description, and above all not from a GitHub issue title. Only text the Jira
   presents as a criterion is a criterion.
-- **No criteria found:** say so, name the sources you checked, and continue with
-  the rest of the rollup. The coverage section then reports that there is nothing
-  to assess against — it does not get filled with inferred criteria.
-- **Ambiguous criterion** — one that is not checkable as written (`performance
-  should be acceptable`): keep it verbatim, assess it `Unable to assess`, and ask
-  the owner to restate it.
+- **None found:** say so, name the sources you checked, and continue with the
+  rest of the rollup. The coverage section then reports that there is nothing to
+  assess against — it does not get filled with inferred criteria.
+- **Unresolved parameter or decision** (`within the agreed latency budget (TBD)`)
+  — keep it verbatim and leave the splitting to step 8. A single TBD inside a
+  criterion does not make the criterion unassessable.
+- **Nothing checkable at all** (`performance should be acceptable`): keep it
+  verbatim, assess it `Unable to assess`, and ask the owner to restate it.
 
 ### 3. Find the GitHub epic links
 
-Scan, in this order, stopping when you find at least one epic:
+Scan every source — do not stop at the first hit — and sort what you find into
+two tiers, because the difference decides whether you ask:
+
+**Explicit mapping.** A human stated that this is the upstream work:
 
 1. A dedicated section in the description (the conventional heading text is
    `Upstream Development` — see `examples/jira-link-section.md`).
-2. Jira remote links / web links pointing at `github.com`.
-3. Any `github.com/<org>/<repo>/issues/<n>` URL elsewhere in the description.
-4. Comments, most recent first.
+2. Jira remote links / web links to `github.com` whose label identifies them as
+   upstream work (`Upstream epic`, `Upstream development`, and the like).
+3. A link the **user** supplied in this conversation as the mapping for this
+   issue.
+
+**Incidental.** A GitHub URL that merely appears:
+
+4. Any other `github.com/<org>/<repo>/issues/<n>` URL in the description.
+5. GitHub URLs in comments, most recent first.
 
 Normalize every hit to `<org>/<repo>#<number>`. De-duplicate.
 
-**If no GitHub link is found, stop.** Report that the Jira has no upstream link
-and ask the user to add one. Do not guess an epic by searching GitHub for
-title matches — a wrong epic produces a confidently wrong rollup.
+**Roll up every link in the explicit tier — all of them, not the first.** A
+requirement that spans a data plane and a control plane genuinely has two epics,
+and reporting one of them under-reports the requirement. Multiple explicit links
+are not a conflict to resolve; do not ask which is "the" epic.
 
-**If multiple unrelated epics are found**, list them and ask which to include
-rather than silently merging them.
+Ask only where the intended scope is actually unclear:
 
-### 4. Traverse the epic
+| Situation | Do this |
+| --- | --- |
+| Explicit tier has two or more entries | Include all of them. No question. |
+| Explicit tier empty, incidental tier has exactly one issue URL | Use it, and say in the draft that it came from an unlabelled source. |
+| Explicit tier empty, incidental tier has several | List each with where it was found, and ask which are in scope. |
+| Incidental tier adds issues beyond the explicit set | Roll up the explicit set; list the extras and ask whether to add them. Do not drop them silently, and do not fold them in silently either. |
+| A link points at a PR, project board, milestone, or bare repo | Name it and ask for the epic issue. It has no children to traverse. |
+
+**Keep every artifact attributable to the epic it came from.** With more than one
+epic in scope, each child, PR, and piece of evidence carries its originating
+epic, and every absence claim names all the epics it was checked against — "no
+evidence in `example-org/a#1` or `example-org/b#2` and their children," not "no
+evidence upstream."
+
+**If no GitHub link is found anywhere, do not stop — produce a partial draft**
+(step 9). Report the Jira side in full, mark upstream progress and coverage as
+unassessable for want of a mapping, and say exactly what link would complete the
+assessment. Do not guess an epic by searching GitHub for title matches: a wrong
+epic produces a confidently wrong rollup, which is worse than a partial one.
+Steps 4 to 7 then have nothing to operate on: go straight to step 8 with an
+empty evidence set.
+
+### 4. Traverse the epics
 
 For each epic, use `gh` (read-only). Child issues can be expressed several ways;
 check all of them and union the results:
@@ -197,6 +245,7 @@ Derive the rollup state from evidence, not from optimism:
 
 | Signal | Report as |
 | --- | --- |
+| No upstream mapping on the Jira | Unknown — upstream mapping missing |
 | All children closed, PRs merged | Complete |
 | Some children closed, PRs merged, others open | In progress, with counts |
 | Children open, PRs open or draft | In progress, early |
@@ -214,16 +263,22 @@ Call out explicitly:
 Never infer a completion percentage that the evidence does not support, and never
 describe work as "done" because an issue is closed if no PR merged.
 
-`Complete` additionally requires that every acceptance criterion came out
+`Complete` additionally requires that every requirement from step 2 came out
 `Evidence found` in step 8 with no downstream qualification outstanding. Closed
-children with uncovered criteria are `In progress`, not `Complete`.
+children with uncovered requirements are `In progress`, not `Complete`.
 
-### 8. Assess acceptance-criteria coverage
+`Unknown — upstream mapping missing` is a statement about the Jira issue, not
+about the work. Never degrade it to `Not started`, `Blocked`, or `At risk`: a
+requirement with no recorded link may be fully implemented upstream by a team
+that never linked it, and nothing you inspected can distinguish the two.
 
-Take each criterion from step 2 and ask what the sources you actually inspected
-establish about it. Never work in the other direction — starting from an issue
-and looking for a criterion it might satisfy is how candidate mappings get
-promoted to coverage.
+### 8. Assess requirement coverage
+
+Take each requirement from step 2 — acceptance criteria, success criteria, and
+definition-of-done items alike — and ask what the sources you actually inspected
+establish about it. Never work in the other direction: starting from an issue and
+looking for a criterion it might satisfy is how candidate mappings get promoted
+to coverage.
 
 **Evidence state** — the furthest point the supporting evidence reached:
 
@@ -247,7 +302,7 @@ two-clause criterion does not make it `tested` — that is `merged` at most, and
 | Evidence found | The evidence supports the criterion. State precisely what it establishes. |
 | Partial evidence | Covers part of the criterion. Name what is still unverified. |
 | No evidence found | The sources inspected do not establish coverage. |
-| Unable to assess | Access failure, truncated results, or an ambiguous criterion blocked assessment. |
+| Unable to assess | An access failure, truncated results, a criterion with no checkable clause at all, or a missing upstream mapping blocked assessment. Say which. |
 
 The two columns answer different questions and must not be collapsed:
 **Evidence state is how far the work got; Coverage is what the behavior is
@@ -256,6 +311,31 @@ assessment — a criterion whose only evidence is an open PR is `No evidence
 found` at state `in review`, with the PR named in the Gap column. `Partial
 evidence` is for a criterion that is genuinely part-covered by landed evidence,
 typically one with two clauses where only one of them merged.
+
+**A criterion that mixes checkable requirements with an unresolved parameter or
+decision is not automatically `Unable to assess`.** Split it instead:
+
+1. Assess the checkable clauses against the evidence exactly as you would a
+   whole criterion.
+2. Name the unresolved part, the specific clarification needed, and who can give
+   it — "the retention window is given as TBD; product to set a value before this
+   clause can be checked," not "criterion is ambiguous."
+3. The row takes the assessment the checkable clauses earn — `Partial evidence`
+   when they are covered and the unresolved clause is still open, `No evidence
+   found` when they are not covered either. It is not `Evidence found` while an
+   unresolved clause remains: the criterion as stated cannot be met until someone
+   decides what it asks for.
+
+`Unable to assess` stays reserved for a criterion with **no** checkable clause at
+all (`performance should be acceptable`), for access failures or truncated
+retrieval, and for the case where there was no upstream mapping to assess
+against. Discarding the checkable half of a criterion because one number in it is
+undecided throws away the part of the assessment that was free to make.
+
+With no mapping, every row reads `Unable to assess — upstream mapping missing`,
+the same wording throughout. A criterion with an unresolved clause keeps that
+clause named in the Gap column even then: it is a separate ask of a separate
+person, and the missing link does not absorb it.
 
 Evidence rules, in force for every row:
 
@@ -268,6 +348,10 @@ Evidence rules, in force for every row:
 - **"No evidence found" is never "not implemented."** It is a statement about
   what you looked at, and it must be scoped that way in the text: "no evidence in
   example-org/example-gateway#412 and its children."
+- **A missing mapping is never missing implementation.** When the Jira has no
+  upstream link at all, you inspected nothing upstream, so you know nothing about
+  the state of the work. Say the mapping is missing; never say, imply, or let the
+  layout suggest that the work has not been done.
 - **Scope every absence claim** to the sources actually inspected. If traversal
   was partial, the absence claim is weaker still — say so.
 - **Incomplete access or traversal is reported prominently**, not as a footnote.
@@ -279,21 +363,27 @@ Evidence rules, in force for every row:
   target dates. If no owner is identified in the sources, write "owner not
   identified in the sources inspected."
 
-Then, **separately for each criterion, state whether downstream integration or
+Then, **separately for each requirement, state whether downstream integration or
 qualification is still required.** This is a different question from upstream
 coverage and is answered independently: upstream `Evidence found` with a merged
 PR routinely still needs a downstream build, payload, or qualification run. Do
 not claim a downstream step is complete unless the sources inspected show it; if
 downstream state was not inspected at all, say that.
 
-Finally, sort the criteria into the three failure kinds, because they need
+Finally, sort the requirements into the failure kinds, because they need
 different follow-ups and the Summary has to distinguish them:
 
 | Kind | Looks like | Follow-up |
 | --- | --- | --- |
-| Missing tracking | No upstream issue mapped at all | Owner identifies coverage or confirms a gap |
+| Missing mapping | The Jira records no upstream link at all | Someone adds the link; nothing is known about the work until then |
+| Missing tracking | Upstream was traversed, but no issue in it maps to this requirement | Owner identifies coverage or confirms a gap |
+| Unresolved requirement | A clause of the requirement names a parameter or decision nobody has set | Product or owner decision, not engineering time |
 | Unfinished implementation | Mapped, but planned / in progress / in review | Engineering time |
 | Downstream validation | Upstream merged or tested, downstream pending | Integration or qualification run |
+
+The first two look identical in a table cell and are not the same finding.
+`Missing mapping` means the search never happened; `Missing tracking` means it
+happened and came back empty.
 
 ### 9. Draft the rollup
 
@@ -302,14 +392,23 @@ short — a rollup that runs longer than a screen will not be read. The audience
 a program manager scanning for risk, not an engineer reading a changelog.
 
 Include a generation timestamp and the epic(s) the rollup was derived from, so a
-reader can tell how stale it is and verify the source.
+reader can tell how stale it is and verify the source. List every epic when more
+than one is in scope.
 
-Material acceptance-criteria gaps belong in the Summary, not only in the table —
-any criterion with `No evidence found` or `Partial evidence`, and any coverage
-that could not be assessed. Name the kind of gap (missing tracking, unfinished
-implementation, downstream validation) so the reader knows who has to act. If
-every criterion is covered, the Summary says so in the same sentence structure;
-it does not go silent on coverage.
+Material coverage gaps belong in the Summary, not only in the table — any
+requirement with `No evidence found` or `Partial evidence`, and any coverage that
+could not be assessed. Name the kind of gap (missing mapping, missing tracking,
+unresolved requirement, unfinished implementation, downstream validation) so the
+reader knows who has to act. If every requirement is covered, the Summary says so
+in the same sentence structure; it does not go silent on coverage.
+
+**When no upstream mapping was found**, the draft is partial, not withheld: the
+Jira scope and the full requirements table, every row `Unable to assess —
+upstream mapping missing`, plus a `What is needed` section naming the link that
+would complete it. `references/rollup-format.md` carries the exact shape; what
+must not vary is that the status stays `Unknown — upstream mapping missing`,
+there is no Progress section, and nothing in the draft describes the work as not
+started, unimplemented, behind, or at risk.
 
 ### 10. Post only after approval
 
@@ -323,15 +422,31 @@ so the issue does not accumulate near-identical updates.
 Posting to Jira is outward-facing and visible to the whole project — never do it
 without the user saying yes to that specific draft.
 
+**If the user asked for a draft, the draft is the deliverable.** Hand it over and
+stop. Asking for a draft is not approval to post, a partial draft is not a
+special case, and approval of an earlier draft never carries forward to this one.
+
 ## Failure modes to avoid
 
-- **Inventing an epic link.** No link means stop and ask, not search-and-guess.
+- **Inventing an epic link.** No link means a partial draft plus a request for
+  the link — never a title search, and never a plausible guess.
+- **Stopping dead when no epic is linked.** The Jira side is still worth
+  reporting, and the requirements table is the most useful part of it.
+- **Reading a missing mapping as missing work.** No link means you looked at
+  nothing upstream, not that nothing happened upstream.
+- **Rolling up only the first epic.** Every explicitly linked epic is in scope,
+  and each artifact stays attributed to the one it came from.
 - **Dropping cross-repo children.** The epic's repo is not the children's repo.
 - **Reporting closed as shipped.** Closed without a merged PR is a flag, not a win.
 - **Creating Jira issues.** See the constraint at the top.
 - **Silent staleness.** Always timestamp; always name the source epic.
 - **Writing criteria the Jira does not contain.** A paraphrase is an invented
   criterion. Quote, or report that none were found.
+- **Totalling the requirement types.** Acceptance criteria, success criteria, and
+  definition-of-done items are counted and labelled separately. "Five acceptance
+  criteria" when two of them are DoD items misreports what was committed to.
+- **Writing off a whole criterion because one clause is undecided.** Assess the
+  checkable clauses; name the specific decision the rest is waiting on.
 - **Promoting a candidate mapping.** A matching issue title is a lead to verify,
   not coverage. Read the issue before claiming the criterion is addressed.
 - **Reading "no evidence found" as "not implemented."** It describes your
