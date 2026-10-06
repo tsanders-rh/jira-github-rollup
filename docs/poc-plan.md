@@ -18,14 +18,19 @@ writing it by hand.
 ### In scope
 
 - One Jira issue in, one draft rollup out.
-- Epic discovery from links a human already placed on the Jira issue.
+- Epic discovery from links a human already placed on the Jira issue, or supplied
+  in the request. All explicitly linked epics are in scope, not just the first.
+- A partial draft when no link exists at all: Jira scope and requirements
+  reported, upstream coverage marked unassessable, the needed link named.
 - Traversal of child issues via native sub-issues, epic-body task lists, and
   timeline cross-references.
 - Child issues in repositories other than the epic's.
 - PR resolution per child, including merge state and target branch.
-- Acceptance-criteria coverage: criteria quoted from the named issue and its
-  child requirements, mapped to upstream evidence, with a per-criterion coverage
-  assessment and a separate downstream-qualification statement.
+- Requirement coverage: acceptance criteria, success criteria, and
+  definition-of-done items quoted from the named issue and its child
+  requirements with their types preserved, mapped to upstream evidence, with a
+  per-requirement coverage assessment and a separate downstream-qualification
+  statement.
 - CI and changed-file evidence on PRs, used only to support a named behavior.
 - Posting the approved draft as a comment on that same Jira issue.
 - Updating a prior rollup comment in place instead of appending.
@@ -107,13 +112,31 @@ These need answers from real data before this is more than a PoC.
     requirements finely this could pull in criteria the parent's audience does
     not consider theirs.
 
+11. **Is a partial draft worth posting, or only worth showing?**
+    It is useful to the person who ran it. Whether a comment reading "nobody
+    linked an epic" belongs on the issue, or is better handled by just adding
+    the link, is unknown. If every partial draft gets discarded rather than
+    posted, the right output may be a shorter prompt for the link.
+
+12. **Do our requirements actually separate the three types?**
+    The typing rule costs nothing if every issue has one `Acceptance Criteria`
+    heading. It pays off only if teams genuinely use `Definition of Done` and
+    `Success Criteria` with different meanings. Answerable from the same three
+    real requirements as question 7.
+
+13. **How common is the mixed criterion — part checkable, part TBD?**
+    The split-assessment rule is the most intricate thing in step 8. If real
+    criteria rarely carry an open parameter, it is complexity that never fires;
+    if they routinely do, `Unresolved requirement` may deserve to be a column
+    rather than prose in a cell.
+
 ## Milestones
 
 | # | Milestone | Done when |
 | --- | --- | --- |
 | 1 | Link conventions agreed | A real Jira issue carries an epic link in the documented form |
 | 2 | Traversal validated | Skill enumerates the correct children, cross-repo included, verified by hand |
-| 3 | Criteria extraction validated | Criteria quoted verbatim from three real requirements, with sources correct and nothing invented |
+| 3 | Criteria extraction validated | Criteria quoted verbatim from three real requirements, with types, sources, and counts correct and nothing invented |
 | 4 | Coverage assessments defensible | On three real requirements, an EM agrees with every assessment, or disagrees only about `Partial` vs `Evidence found` |
 | 5 | Draft quality | Three consecutive rollups an EM would post with no edits |
 | 6 | Round trip | An approved draft posts cleanly and renders correctly |
@@ -142,8 +165,12 @@ The PoC succeeds if, across five real requirements:
 - No criterion is reported as covered on evidence that does not support it. A
   single `Evidence found` that an EM can refute fails the PoC, for the same
   reason and more sharply: a coverage table is read as a verification record.
-- No criterion appears in a rollup that is not in the Jira, in any form.
+- No criterion appears in a rollup that is not in the Jira, in any form, and no
+  criterion is reported under a type the Jira did not state it under.
 - Every absence claim in a shipped rollup is scoped to the sources inspected.
+- No rollup describes work as unstarted, behind, or at risk on the strength of a
+  missing link. A partial draft that reads as bad news fails the PoC the same way
+  an overstated one does, in the opposite direction.
 - Total time per rollup, including review, is under what writing it by hand costs.
 
 ## Known risks
@@ -164,6 +191,12 @@ The PoC succeeds if, across five real requirements:
   nobody implemented look identical from the epic. The rollup distinguishes them
   in wording only — it cannot detect the first case, which is why unmapped
   criteria are escalated to an owner rather than resolved by the skill.
+- **A partial draft read as a status report.** It has the same heading, the same
+  table, and the same marker line as a real rollup, and a reader skimming it may
+  take a column of `Unable to assess` as a column of bad news. The `Unknown`
+  status, the absent Progress section, and the explicit "this says nothing about
+  whether the work exists" sentence are what hold that apart. They are the
+  load-bearing parts of that shape, not padding.
 - **Rate limits.** Deep traversal across many repos makes a lot of API calls.
   Not a concern at single-issue scale; would be at bulk scale.
 - **Scope creep toward mirroring.** The first time someone asks "can it just
@@ -196,3 +229,48 @@ reasoning.
   The alternative — letting an open PR count as `Partial evidence` — makes
   `Partial` mean two different things and lets in-flight work read as coverage,
   which is the exact overstatement the section exists to prevent.
+- *2026-10-05* — **A missing upstream mapping produces a partial draft rather
+  than a stop.** This clarifies hard constraint 3 in `CLAUDE.md` without relaxing
+  it: the prohibition on guessing an epic is unchanged, and the skill still asks
+  for the link. What changed is that it no longer discards the work it already
+  did. The Jira scope, the child requirements, and the verbatim requirements
+  table cost nothing upstream and are the most useful part of the output;
+  withholding them because one input is absent trades a usable artifact for an
+  error message. The draft marks upstream progress and coverage
+  `Unable to assess — upstream mapping missing`, names exactly what link would
+  complete it, and is explicit that a missing mapping is not missing
+  implementation. Status `Unknown — upstream mapping missing` was added for this
+  and may never be softened to `Not started` — a team shipping fine that simply
+  never updated the Jira is the most likely cause, and reporting them as
+  unstarted is the worst available error.
+- *2026-10-05* — **Requirement types are preserved end to end.** Acceptance
+  criteria, success criteria, and definition-of-done items are extracted under
+  separate ID prefixes (`AC`, `SC`, `DoD`; `REQ` for a list under no recognized
+  heading), numbered per type per source issue, and counted separately in the
+  output. Rejected the simpler alternative of normalizing everything to "AC":
+  they are commitments of different kinds, made by different people, and a
+  reader chases a failed DoD item differently from a failed acceptance criterion.
+  A combined total labelled "acceptance criteria" misstates what was agreed.
+- *2026-10-05* — **A criterion that mixes checkable clauses with an undecided
+  parameter is assessed, not discarded.** The checkable clauses get the normal
+  treatment; the unresolved clause is reported as a named clarification with its
+  owner. `Unable to assess` is now reserved for a criterion with no checkable
+  clause at all, plus access failures and truncated retrieval. The previous rule
+  — any ambiguity makes the whole criterion unassessable — threw away real
+  findings and, worse, pushed a product or compliance decision into the same
+  bucket as an engineering gap. `Unresolved requirement` was added to the
+  failure-kind list for exactly that reason. A row with an open clause still
+  cannot reach `Evidence found`: the criterion as written cannot be met until
+  someone says what it asks for.
+- *2026-10-05* — **All explicitly linked epics are rolled up, without asking.**
+  Link sources are now tiered: the `Upstream Development` section, a labelled
+  GitHub web link, and a URL the user supplies in the request are explicit
+  mappings; bare URLs elsewhere in the description and links in comments are
+  incidental. Everything explicit is in scope — a requirement spanning a data
+  plane and a control plane genuinely has two epics, and asking the user to pick
+  one produces an under-reported rollup. Clarification is asked only where scope
+  is genuinely unclear: several incidental links and nothing explicit, incidental
+  links that would widen an explicit set, or a link pointing at a PR, board, or
+  milestone. Every artifact stays attributed to the epic it came from, and
+  absence claims enumerate all epics inspected — an absence scoped to one epic
+  when two were traversed is a false statement about the other.

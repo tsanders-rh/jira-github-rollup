@@ -23,8 +23,10 @@ explicit decision recorded in `docs/poc-plan.md`.
 2. **The skill never posts to Jira without explicit approval of the draft.**
    Approval of a previous draft does not carry forward.
 3. **The skill never guesses which GitHub epic corresponds to a Jira issue.**
-   The human-created link is the only acceptable source. No link means stop and
-   ask.
+   The human-created link is the only acceptable source. No link means a partial
+   draft — the Jira side reported in full, upstream coverage marked unassessable,
+   and the needed link named. It never means a title search, and it never means
+   reporting the work as unstarted.
 4. **GitHub access is read-only.** No issue creation, no comments, no edits.
 
 If a change would weaken any of these, say so plainly rather than making it.
