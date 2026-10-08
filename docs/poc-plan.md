@@ -34,6 +34,13 @@ writing it by hand.
 - CI and changed-file evidence on PRs, used only to support a named behavior.
 - Posting the approved draft as a comment on that same Jira issue.
 - Updating a prior rollup comment in place instead of appending.
+- A dated JSON snapshot per run, saved under
+  `~/.jira-github-rollup/snapshots/<JIRA-KEY>/`, append-only, drafts
+  distinguishable from published.
+- A trend section reporting unweighted movement against the previous snapshot:
+  child issues completed, requirements with evidence found, downstream
+  qualification confirmed, the counts behind each, and a classified list of what
+  changed.
 
 ### Explicitly out of scope
 
@@ -57,7 +64,16 @@ writing it by hand.
   later reads as approved is worse than a blank.
 - **Downstream qualification evidence.** The skill reports that downstream work
   is still required; it does not inspect downstream builds, payloads, or
-  qualification runs. Whether it should is open question 8.
+  qualification runs. Whether it should is open question 8. A consequence worth
+  stating plainly: until that changes, the downstream row of every trend section
+  reads `0 confirmed, 0 pending, N unknown`.
+- **Estimation and forecasting.** No effort weighting, no story points, no
+  velocity, no burn-down, no projected completion date. The trend section
+  reports movement between two observations and is deliberately built so that a
+  rate cannot be read out of it.
+- **Shared or synchronized snapshot storage.** Snapshots are local to one
+  machine and one user. Two people rolling up the same issue keep separate
+  histories — see open question 14.
 
 ## Open questions
 
@@ -77,9 +93,13 @@ These need answers from real data before this is more than a PoC.
 3. **Do PRs reliably link to their issues?** Without `Closes #N`, the rollup can
    report open/closed but not merge state, which is most of its value.
 
-4. **Wiki markup or ADF?** Depends on the Jira site's editor. Affects whether the
-   table in `references/rollup-format.md` renders or shows as literal pipes.
-   One test comment on a scratch issue answers this.
+4. **What does `addOrEditJiraIssueComment` actually accept?** Wiki markup, ADF,
+   or plain text, depending on the site's editor and on what the MCP tool does
+   with the string. It decides whether the posted coverage table renders or
+   shows as literal pipes. The skill now reads the tool's own schema and falls
+   back to plain text, but one test comment on a scratch issue would replace the
+   fallback with a known answer — and would also tell us whether the five-column
+   table survives at all.
 
 5. **Does a rollup comment actually get read?** If the answer is no, the right
    output is a description section or a dashboard, not a comment. Worth asking
@@ -130,6 +150,26 @@ These need answers from real data before this is more than a PoC.
     if they routinely do, `Unresolved requirement` may deserve to be a column
     rather than prose in a cell.
 
+14. **Is local-only snapshot storage enough?**
+    Snapshots live on one machine under one home directory. If two people roll up
+    the same issue, each sees only their own history, and the trend section each
+    gets is correct but different. A shared store (a repo, an S3 prefix, a Jira
+    attachment) would fix that and costs a sync mechanism, a merge policy, and a
+    place for private criteria text to leak. Local-only is the right PoC answer;
+    it may not survive a second user.
+
+15. **Does anyone act on the trend section?**
+    The parallel to question 5. A trend that nobody reads is three ratios of
+    overhead on every rollup. Worth watching whether the first question after a
+    posted rollup is ever "what changed since last time" — if it is always
+    "what's left", the section is answering the wrong question.
+
+16. **How often does requirement text change versus get replaced?**
+    Match pass 2 pairs an edited criterion with its previous self; pass 3 gives
+    up and reports a removal plus an addition. If real teams edit criteria in
+    place constantly, the near-match heuristic carries more weight than it
+    deserves and should probably be replaced by asking.
+
 ## Milestones
 
 | # | Milestone | Done when |
@@ -141,6 +181,7 @@ These need answers from real data before this is more than a PoC.
 | 5 | Draft quality | Three consecutive rollups an EM would post with no edits |
 | 6 | Round trip | An approved draft posts cleanly and renders correctly |
 | 7 | Idempotence | A second run updates the prior comment rather than duplicating |
+| 8 | Trend survives a real interval | Two runs a fortnight apart on the same real requirement, where every reported change is one a human confirms happened, and every unreported thing genuinely did not change |
 
 Milestone 2 is the real gate. If traversal is unreliable, nothing downstream
 matters — and questions 1 and 2 above are answerable in an afternoon against
@@ -172,6 +213,13 @@ The PoC succeeds if, across five real requirements:
   missing link. A partial draft that reads as bad news fails the PoC the same way
   an overstated one does, in the opposite direction.
 - Total time per rollup, including review, is under what writing it by hand costs.
+- No trend section reports a change that did not happen, and none misses one that
+  did. A false "+2 requirements covered" is the same failure as an overstated
+  status, arriving by a different route.
+- No trend section credits as progress work that merged before the baseline, and
+  none presents a denominator change as a regression.
+- No reader of a trend section infers a completion date from it. If one does, the
+  section is wrong regardless of whether its numbers were right.
 
 ## Known risks
 
@@ -197,6 +245,28 @@ The PoC succeeds if, across five real requirements:
   status, the absent Progress section, and the explicit "this says nothing about
   whether the work exists" sentence are what hold that apart. They are the
   load-bearing parts of that shape, not padding.
+- **A trend section read as a burn-down.** Three ratios and a set of deltas look
+  like a projection whether or not one is offered, and the first thing anyone
+  does with two data points is extrapolate. The unweighted-indicator label, the
+  refusal to weight partial coverage, and the absence of any rate or date are
+  the counterweights. This is the risk most likely to be realized by someone
+  pasting the numbers into a different document, where the label does not travel.
+- **Discovery credited as progress.** Restoring access to a repository, or
+  someone finally adding an epic link, can move several requirements to
+  `Evidence found` in a run where nothing was built. Reported as a month's
+  progress, that is a false status update produced by an honest pipeline. The
+  evidence-timestamp test is the guard, and it fails quietly when evidence
+  carries no usable date — which is why `undetermined` exists and must not be
+  collapsed into progress.
+- **A stale mapping resurrected from the snapshot.** The store now remembers
+  which epic was linked last run, which makes it mechanically easy to keep using
+  a link a human deleted. That is the no-guessing constraint breached from a new
+  direction, and it is why the rule is to report what used to be mapped and
+  refuse to traverse it.
+- **Snapshot drift from a hand-edited store.** The files are plain JSON in the
+  user's home directory, and nothing stops them being edited or partially
+  deleted. The schema version catches shape changes; it does not catch a
+  plausible-looking lie. A baseline is trusted as far as the user's own disk is.
 - **Rate limits.** Deep traversal across many repos makes a lot of API calls.
   Not a concern at single-issue scale; would be at bulk scale.
 - **Scope creep toward mirroring.** The first time someone asks "can it just
@@ -274,3 +344,83 @@ reasoning.
   milestone. Every artifact stays attributed to the epic it came from, and
   absence claims enumerate all epics inspected — an absence scoped to one epic
   when two were traversed is a false statement about the other.
+- *2026-10-05* — **The draft is GitHub-flavored Markdown; Jira markup is a
+  conversion applied at post time.** The rollup now has one content contract and
+  two renderings. Previously the draft was written in wiki markup because that
+  is what the comment would eventually need, which meant the reviewer approving
+  it saw `h3.` lines and `||` rows as literal punctuation in a terminal that
+  renders Markdown — being asked to approve a table they could not read. The
+  content, section order, and every verbatim quote are identical in both
+  renderings; only the markup differs. Conversion happens once, after approval,
+  and against what the comment tool documents as its input rather than an
+  assumption: Jira Cloud sites take wiki markup, ADF, or plain text depending on
+  the editor. Where that is unclear the payload is plain text with bare URLs,
+  which degrades gracefully everywhere, and the skill says which format it sent
+  so a mis-render is diagnosable. Open question 4 was rewritten to match.
+- *2026-10-06* — **Snapshots are local JSON files, append-only, under
+  `~/.jira-github-rollup/snapshots/<JIRA-KEY>/`.** This adds a write outside
+  Jira, recorded as `CLAUDE.md` hard constraint 5 rather than left implicit.
+  Rejected alternatives: *inside the Jira comment* — the skill edits that comment
+  in place to avoid spam, which would destroy the baseline on every run, and it
+  would mean parsing rendered prose back into data; *a Jira attachment or
+  property* — a Jira write on every run, including draft-only runs, which breaks
+  the approval rule for no benefit; *relative to the working directory* — the
+  skill runs from wherever the user happens to be, so snapshots would scatter and
+  occasionally be committed to an unrelated repository. Append-only is the part
+  that matters: a run writes a new dated file and never overwrites or deletes
+  one, and promotion from draft to published edits only the run's own file. The
+  cost is accepted deliberately — snapshots are local to one machine and one
+  user, so two people rolling up the same issue keep divergent histories
+  (open question 14), and the files hold verbatim criteria from private issues
+  in plaintext on disk, which the README states rather than hides.
+- *2026-10-06* — **The trend section reports unweighted counts and refuses to
+  forecast.** Three ratios — child issues completed, requirements with evidence
+  found, requirements confirmed downstream — each with its fraction, its
+  supporting counts, and a percentage-point delta. No effort weighting, no story
+  points, no velocity, no burn-down, no projected date, and a mandatory label
+  saying so. Rejected giving `Partial evidence` fractional credit: there is no
+  basis for deciding a two-clause criterion is half met, the number would be
+  invented, and a weighted ratio reads as progress toward release — which is the
+  one reading the section must not support. `Partial` is counted in its own
+  bucket where a reader can see it.
+- *2026-10-06* — **Unassessable requirements and `NOT_PLANNED` children stay in
+  the denominator.** Removing either would make losing access, or descoping work,
+  render as an improvement. A child closed with an empty `stateReason` — GitHub
+  recorded no reason before 2022 — is a fourth bucket, named and not counted as
+  completed, rather than being silently normalized either way. Verified against
+  `gh` 2.81.0: `gh issue view --json stateReason` returns `COMPLETED`,
+  `NOT_PLANNED`, or `""`.
+- *2026-10-06* — **An unobservable count is `unknown`; only an observed zero is
+  `N/A`.** Initially both the no-mapping case and the unreadable-epic case were
+  going to render `N/A`, which was wrong: a 404 is not a count of zero, and
+  `0/0` or `0%` claims a measurement that never succeeded. `N/A` now means the
+  epic was read and has no children. Same reasoning as `Unable to assess` versus
+  `No evidence found`, applied to the numbers.
+- *2026-10-06* — **Requirements are matched across snapshots on
+  `(source key, type, verbatim text)`, never on ID.** IDs are per-type ordinals,
+  so inserting one criterion renumbers every criterion below it and an ID-based
+  diff reports a wall of changes that never happened. Verbatim text becomes
+  load-bearing for a second reason beyond quoting: it is half the match key, so
+  a tidied-up copy silently breaks the comparison against every future run.
+- *2026-10-06* — **Assessment changes are split into implementation progress
+  versus newly discovered evidence,** decided by comparing each new piece of
+  evidence's date against the baseline's timestamp. Access restored or a link
+  finally added can move several requirements in a month with no code written,
+  and reporting that as progress would be a false status update produced by an
+  honest pipeline. Where evidence carries no usable date the answer is
+  `undetermined`, said out loud — never defaulted to progress.
+- *2026-10-06* — **The baseline is the most recent published snapshot,** falling
+  back to the most recent draft with an explicit "never published" label. A
+  published snapshot is what a reader of the Jira issue last saw, and the trend
+  section is addressed to them. With no snapshot at all the line is
+  `Baseline established — no prior snapshot available`; the issue's history and
+  a previous rollup comment are both available and neither is a baseline, since
+  a comment is rendered prose rather than data. A mapping remembered from a
+  previous snapshot is reported as *what used to be mapped* and is never
+  traversed — otherwise the store would quietly reintroduce guessing from a new
+  direction.
+- *2026-10-06* — **`Since last rollup` is replaced by
+  `Trend since previous snapshot`,** rather than both existing. The old section
+  was a free-text delta against the prior comment; the new one is the quantified
+  version of the same idea with a real data source behind it. Keeping both would
+  have invited the two to disagree.

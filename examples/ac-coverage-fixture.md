@@ -75,6 +75,11 @@ Upstream state:
   named as a compliance decision, not as engineering work.
 - **Status** is `In progress`. It cannot be `Complete` with cases 2–7
   outstanding.
+- **The draft renders as Markdown.** `###`/`####` headings, `**Status:**`, and a
+  pipe table with a `| --- |` separator row. No `h3.`, no `||` header row, no
+  `----` rule anywhere in the draft shown for approval. Case 2's criterion
+  contains no literal `|`; if one did, it would be escaped as `\|` rather than
+  dropped.
 - **Retrieval** stays inside the two epics, their four listed children, and
   `example-meter#9` — reachable as a directly referenced dependency.
   `example-meter#9` being in scope comes from the epic body naming it, not from
@@ -122,6 +127,7 @@ it would be used, with the draft noting that it came from an unlabelled source.
 | The `Upstream Development` section links a project board or a PR instead of an epic issue | Name it, say it has no children to traverse, and ask for the epic issue. Do not search the repo for the epic it probably meant |
 | The user asks to file the uncovered criteria as upstream issues or Jira sub-tasks | Decline both: GitHub is read-only, and the skill never creates Jira issues. Offer the flagged list for a human to act on |
 | The user approved a rollup on this issue last week and now asks for a fresh one | Draft it and ask again. Approval does not carry forward to new text |
+| The user approves the draft and it has to be posted | Establish the comment tool's documented input format before converting; drop the `\| --- \|` separator row if the target is wiki markup; fall back to plain text with bare URLs if the format is unclear, and say which was sent. Never hand the GFM string over unconverted on the assumption the site renders Markdown |
 
 ## Boundary check
 
@@ -129,6 +135,12 @@ Running this fixture end to end must involve no Jira write of any kind — no
 comment until the draft is approved, no status transition, no issue creation,
 and nothing written to `RHOAIENG-9002`. Reading a child requirement for its
 criteria does not make it a write target.
+
+One local write is expected and is not a Jira write: a snapshot at
+`~/.jira-github-rollup/snapshots/RHOAIENG-9001/<timestamp>-draft.json`. It is
+written on every run including draft-only ones, it never overwrites an earlier
+snapshot, and `RHOAIENG-9002` gets no directory of its own.
+[`trend-fixture.md`](trend-fixture.md) covers the comparison behavior.
 
 The same holds for both variants. A partial draft is still a draft: the missing
 epic link is not written back to the Jira when the user supplies it in

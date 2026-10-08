@@ -28,6 +28,14 @@ explicit decision recorded in `docs/poc-plan.md`.
    and the needed link named. It never means a title search, and it never means
    reporting the work as unstarted.
 4. **GitHub access is read-only.** No issue creation, no comments, no edits.
+5. **The only thing written outside Jira is a snapshot**, under
+   `~/.jira-github-rollup/snapshots/<JIRA-KEY>/`. Snapshots are append-only: a
+   run writes a new dated file and never overwrites or deletes an existing one,
+   because editing the Jira comment in place must not destroy the comparison
+   baseline. Nothing else on disk is touched.
+6. **The trend report is unweighted counts, never a forecast.** No partial
+   credit, no velocity, no burn-down, no projected dates. An unobservable count
+   is `unknown`; it is never zero.
 
 If a change would weaken any of these, say so plainly rather than making it.
 
@@ -35,8 +43,9 @@ If a change would weaken any of these, say so plainly rather than making it.
 
 `.claude/skills/jira-github-rollup/SKILL.md` is loaded into context when the skill
 fires, so it pays rent on every invocation. Keep it procedural and tight. Detail
-that is only needed at output time belongs in
-`references/rollup-format.md`, which is read on demand.
+that is only needed at output time belongs in `references/rollup-format.md`;
+the snapshot store, its schema, and the metric definitions belong in
+`references/snapshots.md`. Both are read on demand.
 
 - Frontmatter `description` is what the model matches against. It must name the
   trigger phrases a user would actually type, not describe the implementation.

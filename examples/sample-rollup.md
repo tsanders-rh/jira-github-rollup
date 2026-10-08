@@ -10,6 +10,11 @@ Two drafts are shown: the normal case, and the same requirement when no upstream
 epic is linked. The skill would show either one for approval before posting it as
 a comment — and if you only asked for a draft, it stops at the draft.
 
+Both are reproduced exactly as the skill emits them: **GitHub-flavored Markdown**,
+which is what renders in the conversation you are reviewing them in. If you
+approve one for posting, the skill converts it to whatever the Jira comment tool
+accepts at that point. The words do not change; only the markup does.
+
 ## The fictional input
 
 `RHOAIENG-1234 — Tiered model routing` carries the four acceptance criteria and
@@ -21,14 +26,15 @@ references a fifth issue in a repository this account cannot read.
 
 ---
 
-```
-h3. Upstream Development Rollup
+````markdown
+### Upstream Development Rollup
 
-*Status:* In progress
-*Source epic:* example-org/example-gateway#412 — Request routing for tiered models
-*Generated:* 2026-10-05
+**Status:** In progress
+**Source epic:** [example-org/example-gateway#412](https://github.com/example-org/example-gateway/issues/412) — Request routing for tiered models
+**Generated:** 2026-10-05
 
-*Summary*
+#### Summary
+
 Routing is implemented and merged, but only one of six requirements is fully
 covered by the evidence found upstream. AC3 (metering of routing decisions) has
 no linked upstream work in the sources inspected — a tracking gap rather than a
@@ -39,17 +45,23 @@ example-org/example-controller#88, which is owned by another team and has had no
 activity since 2026-08-28. DoD1 is blocked on a product decision, not on
 engineering: it requires a deprecation period whose length is still TBD.
 
-*Progress*
-2 of 4 child issues closed; 4 pull requests merged.
-|| Child || Status || PRs ||
-| example-org/example-gateway#413 — request routing | Closed | example-org/example-gateway#520 (merged 2026-09-18) |
-| example-org/example-gateway#414 — tier config parsing | Closed | example-org/example-gateway#531 (merged 2026-09-30), example-org/example-gateway#536 (merged 2026-10-01), example-org/example-gateway#541 (merged 2026-10-02) |
+#### Progress
+
+2 of 4 child issues closed as completed; 4 pull requests merged.
+
+| Child | Status | PRs |
+| --- | --- | --- |
+| example-org/example-gateway#413 — request routing | Closed (completed) | example-org/example-gateway#520 (merged 2026-09-18) |
+| example-org/example-gateway#414 — tier config parsing | Closed (completed) | example-org/example-gateway#531 (merged 2026-09-30), example-org/example-gateway#536 (merged 2026-10-01), example-org/example-gateway#541 (merged 2026-10-02) |
 | example-org/example-controller#88 — CRD plumbing | Open | — |
 | example-org/example-tests#15 — e2e coverage | Open | example-org/example-tests#22 (open, 11d) |
 
-*Requirements coverage*
+#### Requirements coverage
+
 5 acceptance criteria, 1 definition-of-done item.
-|| Requirement || Evidence || Evidence state || Coverage || Gap / next validation step ||
+
+| Requirement | Evidence | Evidence state | Coverage | Gap / next validation step |
+| --- | --- | --- | --- | --- |
 | AC1 (RHOAIENG-1234) "Requests for a tiered model are routed to the serving pool configured for that tier." | example-org/example-gateway#413, PR example-org/example-gateway#520 (merged 2026-09-18) | tested | Evidence found — PR #520 implements tier-to-pool selection; CI job e2e-routing passed on the merge commit and asserts pool assignment per tier | Downstream qualification pending; see below |
 | AC2 (RHOAIENG-1234) "An unknown tier is rejected with HTTP 400, and tier configuration changes take effect without a gateway restart." | example-org/example-gateway#414, PRs #531, #536 (merged 2026-09-30, 2026-10-01) | merged | Partial evidence — PR #536 adds tests/test_tier_reject.py covering the 400 on unknown tier. Nothing in #531 or #536 touches config reload; the no-restart half is unverified | Ask owner whether hot reload is in scope for #414 or needs its own issue |
 | AC3 (RHOAIENG-1234) "Routing decisions, including denials, are recorded in the metering stream within 60 seconds." | — | — | No evidence found — no issue in example-org/example-gateway#412 or its four children maps to metering | Owner to identify upstream coverage or confirm this is a gap |
@@ -57,7 +69,8 @@ engineering: it requires a deprecation period whose length is still TBD.
 | DoD1 (RHOAIENG-1234) "The admin guide documents tier configuration, and the gateway logs a deprecation warning for the legacy per-model pool field for at least one release before removal (release count TBD with product)." | example-org/example-gateway#414, PRs #536 (merged 2026-10-01), #541 (merged 2026-10-02) | merged | Partial evidence — PR #541 adds docs/admin-tiers.md covering tier configuration, and PR #536 emits the deprecation warning (tests/test_legacy_warning.py asserts it). The deprecation period cannot be checked at all: the release count is left TBD in the criterion itself | Product to set the release count; the two landed clauses need no further upstream work |
 | AC1 (RHOAIENG-1240) "Per-tier request counts and p99 latency are exposed on the controller /metrics endpoint." | example-org/example-controller#88 (open, no PR) | planned | No evidence found — #88 is open with no linked PR; the sources inspected show planned work, not implemented behavior | Engineering time on #88; owned by the controller team |
 
-*Downstream qualification*
+#### Downstream qualification
+
 - AC1 (RHOAIENG-1234) — implementation merged to main on 2026-09-18. No
   downstream build or qualification run was inspected, so downstream integration
   is still required.
@@ -67,7 +80,8 @@ engineering: it requires a deprecation period whose length is still TBD.
 Requirements not listed above have no identified downstream step in the sources
 inspected; that is not confirmation that none is required.
 
-*Coverage caveats*
+#### Coverage caveats
+
 - example-org/example-dlp is not readable from this account (404 on
   example-org/example-dlp#31), so AC4 could not be assessed in either direction.
 - AC3 has no upstream mapping in the reachable set. No search beyond the epic and
@@ -79,7 +93,8 @@ inspected; that is not confirmation that none is required.
 - Coverage was assessed against example-org/example-gateway#412, its four
   children, and example-org/example-dlp#31 only. No wider search was run.
 
-*Risks and blockers*
+#### Risks and blockers
+
 - example-org/example-controller#88 has no linked PR and no activity since
   2026-08-28 (38 days). It is in a repository this team does not own, and it is
   the only tracking for RHOAIENG-1240 AC1.
@@ -88,10 +103,15 @@ inspected; that is not confirmation that none is required.
   something this traversal can see.
 - example-org/example-tests#22 has been open 11 days with no review.
 
-----
+#### Trend since previous snapshot
+
+Baseline established — no prior snapshot available.
+
+---
+
 _Generated by the jira-github-rollup skill from example-org/example-gateway#412.
 Read-only against GitHub; no Jira issues were created._
-```
+````
 
 ---
 
@@ -168,14 +188,26 @@ six requirements at `Evidence found` with no downstream work outstanding.
 thing in the rollup, and it is exactly what a single-repo traversal would have
 missed.
 
-**No "Since last rollup" section**, because this is the first one. On a later run
-the skill would find the marker line at the bottom, diff against this content, and
-offer to update this comment in place rather than appending a second near-identical
-update.
+**The trend section is one line, because this is the first run.** `Baseline
+established — no prior snapshot available` — not a table of zeroes, and not a
+delta reconstructed from the Jira's own history. There is no history to report
+and the section says so. This run saves a snapshot to
+`~/.jira-github-rollup/snapshots/RHOAIENG-1234/`, which is what the next run
+compares against; see [`sample-rollup-rerun.md`](sample-rollup-rerun.md) for what
+that looks like four weeks later. On that later run the skill also finds the
+marker line at the bottom and offers to update this comment in place rather than
+appending a second near-identical update — which is exactly why the baseline is
+kept on disk and not parsed back out of the comment.
 
 **No filler.** There is no "No other risks identified" line and no restatement of
 the requirement's description. If a section has nothing evidenced to say, it is
 omitted — but `Coverage caveats` is not optional when a source was unreadable.
+
+**The draft is Markdown, not Jira markup.** A six-row five-column table written
+as `||` header rows is unreviewable in a terminal, and approving what you cannot
+read is not approval. The posted comment may well end up as `h3.` and `||` — that
+conversion happens after you say yes, against whatever format the Jira tool takes,
+and it changes nothing above except the punctuation.
 
 ---
 
@@ -185,14 +217,15 @@ Identical Jira, except nobody added an `Upstream Development` section and there
 is no GitHub URL anywhere on the issue. The skill does not stop; it reports the
 half it can see.
 
-```
-h3. Upstream Development Rollup
+````markdown
+### Upstream Development Rollup
 
-*Status:* Unknown — upstream mapping missing
-*Source epic:* none recorded on RHOAIENG-1234
-*Generated:* 2026-10-05
+**Status:** Unknown — upstream mapping missing
+**Source epic:** none recorded on RHOAIENG-1234
+**Generated:** 2026-10-05
 
-*Summary*
+#### Summary
+
 RHOAIENG-1234 records no link to upstream GitHub work, so no upstream state was
 inspected: upstream progress could not be assessed, and neither could coverage
 for any of its six requirements. The requirements below are reproduced from the
@@ -201,13 +234,17 @@ statement about the issue, not about the work: upstream development may be
 complete, in flight, or unstarted, and nothing reachable from this issue
 distinguishes those.
 
-*Jira scope*
+#### Jira scope
+
 RHOAIENG-1234 — Tiered model routing (In Progress, fix version 2.22)
 Child requirements read: RHOAIENG-1240 — Tier observability (To Do)
 
-*Requirements coverage*
+#### Requirements coverage
+
 5 acceptance criteria, 1 definition-of-done item.
-|| Requirement || Evidence || Evidence state || Coverage || Gap / next validation step ||
+
+| Requirement | Evidence | Evidence state | Coverage | Gap / next validation step |
+| --- | --- | --- | --- | --- |
 | AC1 (RHOAIENG-1234) "Requests for a tiered model are routed to the serving pool configured for that tier." | — | — | Unable to assess — upstream mapping missing | Link the upstream epic |
 | AC2 (RHOAIENG-1234) "An unknown tier is rejected with HTTP 400, and tier configuration changes take effect without a gateway restart." | — | — | Unable to assess — upstream mapping missing | Link the upstream epic |
 | AC3 (RHOAIENG-1234) "Routing decisions, including denials, are recorded in the metering stream within 60 seconds." | — | — | Unable to assess — upstream mapping missing | Link the upstream epic |
@@ -215,10 +252,11 @@ Child requirements read: RHOAIENG-1240 — Tier observability (To Do)
 | DoD1 (RHOAIENG-1234) "The admin guide documents tier configuration, and the gateway logs a deprecation warning for the legacy per-model pool field for at least one release before removal (release count TBD with product)." | — | — | Unable to assess — upstream mapping missing | Link the upstream epic; separately, product to set the release count |
 | AC1 (RHOAIENG-1240) "Per-tier request counts and p99 latency are exposed on the controller /metrics endpoint." | — | — | Unable to assess — upstream mapping missing | Link the upstream epic |
 
-*What is needed to complete this assessment*
+#### What is needed to complete this assessment
+
 - The GitHub epic issue URL for this requirement, recorded on RHOAIENG-1234 in an
-  h2. Upstream Development description section or as a web link labelled
-  "Upstream epic". List several if this requirement spans more than one epic —
+  `Upstream Development` description section or as a web link labelled
+  `Upstream epic`. List several if this requirement spans more than one epic —
   all of them will be rolled up.
 - RHOAIENG-1240 may carry its own epic link; it has none either, and its
   criterion is assessed against whatever is linked from the parent unless it gets
@@ -226,10 +264,15 @@ Child requirements read: RHOAIENG-1240 — Tier observability (To Do)
 - Nothing else is blocking. All six requirements were read cleanly and will be
   assessed as soon as an epic is supplied.
 
-----
+#### Trend since previous snapshot
+
+Baseline established — no prior snapshot available.
+
+---
+
 _Generated by the jira-github-rollup skill. No upstream link was found on
 RHOAIENG-1234. Read-only against GitHub; no Jira issues were created._
-```
+````
 
 ### What to notice here
 
@@ -261,3 +304,10 @@ broken.
 **The TBD still gets named.** DoD1's undecided release count is independent of
 the missing epic, so it stays in the Gap column. Two different people are being
 asked for two different things, and the draft keeps them separate.
+
+**A snapshot is still saved.** Nothing upstream was inspected, but the
+requirements, their types, and their verbatim text were all read successfully,
+and those are what the next run matches against. The snapshot records child
+completion as unknown rather than `0/0` — see
+[`trend-fixture.md`](trend-fixture.md), variant 7, for what the trend section
+does when a mapping disappears between runs.

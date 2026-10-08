@@ -74,6 +74,50 @@ assessments in context — and, below them, the same requirement rolled up with 
 epic linked. [`examples/ac-coverage-fixture.md`](examples/ac-coverage-fixture.md)
 holds the cases the rules are desk-checked against.
 
+### Trends across runs
+
+Each run saves a dated snapshot of what it found, and the next run reports what
+moved:
+
+> Requirements with evidence found: 3/7 (43%), previously 1/6 (17%), +26 pp. One
+> requirement gained evidence from a PR merged after the last snapshot; one moved
+> because read access was restored to a repository, and its PR merged in August.
+> Downstream qualification: 0 confirmed, 0 pending, 7 unknown.
+
+Three unweighted ratios — child issues completed, requirements with evidence
+found, requirements confirmed downstream — plus the counts behind them and a list
+of what changed. The constraints are what make it worth reading:
+
+- **Nothing is weighted or extrapolated.** `Partial evidence` gets no fractional
+  credit, and there is no velocity, burn-down, or projected date. Two counts
+  support none of that, and the section is built so nobody can read one out.
+- **Progress and discovery are different news.** Restored access or a
+  newly-added link can move four requirements in a month with no code written.
+  Evidence dated before the last snapshot is reported as newly visible, not newly
+  done.
+- **Added scope is not regression.** When the denominator grows, the percentage
+  falls with nothing having gone backwards — so the like-for-like figure over
+  unchanged requirements is given alongside it.
+- **Unassessable requirements stay in the denominator**, and children closed as
+  *not planned* stay in scope and are named. Losing access or dropping scope must
+  never render as an improvement.
+- **Requirements are matched on source, type, and verbatim text**, never on ID.
+  Inserting one criterion renumbers every criterion below it; an ID-based diff
+  would report that as a wall of changes that never happened.
+- **A first run says `Baseline established — no prior snapshot available`.** It
+  does not reconstruct history from the Jira, and a previous rollup comment is
+  prose, not a baseline.
+
+Snapshots are JSON, one file per run, under
+`~/.jira-github-rollup/snapshots/<JIRA-KEY>/`. They are append-only: posting a
+rollup usually means editing the previous comment in place, so the baseline
+cannot live in the comment. Draft runs save a snapshot too, marked as drafts,
+and write nothing to Jira.
+[`examples/sample-rollup-rerun.md`](examples/sample-rollup-rerun.md) shows a
+second run end to end, including the file it wrote;
+[`examples/trend-fixture.md`](examples/trend-fixture.md) holds the seven runs the
+rules are desk-checked against.
+
 ### What it will not do
 
 - **It does not create Jira issues.** No mirroring, no sub-tasks, no linked
@@ -90,6 +134,12 @@ holds the cases the rules are desk-checked against.
 - **It does not invent criteria, mappings, or test results.** Requirements are
   quoted from the Jira or reported missing. Retrieval stays inside the linked
   epics, their children, and dependencies those artifacts reference directly.
+- **It does not estimate effort or predict a date.** The trend section reports
+  movement between two observations. It is not a burn-down and will not be
+  turned into one.
+- **It does not reuse a stale mapping.** A snapshot remembers which epic was
+  linked last time; if that link is gone from the Jira, the skill reports what
+  used to be mapped and declines to traverse it.
 
 ## Usage
 
@@ -121,15 +171,23 @@ rather than quietly reducing coverage.
 ```
 .claude/skills/jira-github-rollup/
   SKILL.md                      # procedure, traversal, constraints
-  references/rollup-format.md   # output contract and Jira markup notes
+  references/rollup-format.md   # output contract, and converting it for Jira
+  references/snapshots.md       # snapshot store, schema, and trend metrics
 examples/
   jira-link-section.md          # how to link an epic, and how to write criteria
-  sample-rollup.md              # an illustrative generated rollup
+  sample-rollup.md              # an illustrative generated rollup, first run
+  sample-rollup-rerun.md        # the same issue four weeks later, with the trend
   ac-coverage-fixture.md        # coverage cases the rules are desk-checked against
+  trend-fixture.md              # seven runs the trend rules are desk-checked against
 docs/
   poc-plan.md                   # scope, open questions, success criteria
 CLAUDE.md                       # repo conventions for Claude Code
 ```
+
+Snapshots are written outside the repo, to
+`~/.jira-github-rollup/snapshots/`. They contain verbatim Jira text, including
+criteria from private issues; they are local, unencrypted, and never
+transmitted anywhere.
 
 ## Status
 

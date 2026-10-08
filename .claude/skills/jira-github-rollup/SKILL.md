@@ -1,6 +1,6 @@
 ---
 name: jira-github-rollup
-description: Use when asked to summarize, roll up, or report upstream GitHub development status for an existing Jira requirement, or to check whether its acceptance criteria, success criteria, or definition of done are covered upstream (e.g. "roll up RHOAIENG-1234", "what's the upstream status of this epic", "draft a status update for this Jira", "are the acceptance criteria on RHOAIENG-1234 covered", "which requirements have no upstream evidence"). Reads the GitHub epic links already present on the Jira issue, follows child issues and their pull requests across repositories, maps each stated requirement to the upstream evidence for it, and drafts a concise rollup for that same Jira issue. Drafts a partial rollup when no upstream link exists. Read-only against GitHub; never creates mirrored Jira issues.
+description: Use when asked to summarize, roll up, or report upstream GitHub development status for an existing Jira requirement, to check whether its acceptance criteria, success criteria, or definition of done are covered upstream, or to show what has moved since the last such report (e.g. "roll up RHOAIENG-1234", "what's the upstream status of this epic", "draft a status update for this Jira", "are the acceptance criteria on RHOAIENG-1234 covered", "which requirements have no upstream evidence", "what changed since the last rollup", "show the trend on RHOAIENG-1234"). Reads the GitHub epic links already present on the Jira issue, follows child issues and their pull requests across repositories, maps each stated requirement to the upstream evidence for it, and drafts a concise rollup for that same Jira issue. Saves a dated snapshot per run and reports unweighted movement against the previous one. Drafts a partial rollup when no upstream link exists. Read-only against GitHub; never creates mirrored Jira issues.
 ---
 
 # Jira ← GitHub Development Rollup
@@ -23,6 +23,11 @@ nothing — not a comment, not a status transition — is written to the childre
 If the user asks for mirrored Jira issues, say that this skill deliberately does
 not do that and offer the rollup instead.
 
+The one thing it writes outside Jira is a snapshot file under
+`~/.jira-github-rollup/snapshots/`, so the next run has a baseline to compare
+against (step 11). That is a local file, it is written on draft-only runs too,
+and it is never a substitute for approval to post.
+
 ## When this applies
 
 The intended workflow is:
@@ -38,7 +43,7 @@ workflow step 3 — which is the Procedure below, numbered separately.
 
 When workflow step 2 has not happened, the skill still runs: it reports the
 Jira side in full and says precisely what link would complete the assessment
-(step 9). What it never does is supply the missing link by guessing.
+(step 10). What it never does is supply the missing link by guessing.
 
 Coverage analysis rides on the same premise: the requirements are whatever the
 Jira says they are, and the mapping between a requirement and upstream work is
@@ -151,7 +156,7 @@ evidence in `example-org/a#1` or `example-org/b#2` and their children," not "no
 evidence upstream."
 
 **If no GitHub link is found anywhere, do not stop — produce a partial draft**
-(step 9). Report the Jira side in full, mark upstream progress and coverage as
+(step 10). Report the Jira side in full, mark upstream progress and coverage as
 unassessable for want of a mapping, and say exactly what link would complete the
 assessment. Do not guess an epic by searching GitHub for title matches: a wrong
 epic produces a confidently wrong rollup, which is worse than a partial one.
@@ -180,8 +185,19 @@ URLs) — many upstream epics track children that way rather than natively.
 Children frequently live in **different repositories** than the epic. Always
 carry the owning repo with each child; never assume the epic's repo.
 
-`stateReason` distinguishes a child closed as `COMPLETED` from one closed as
-`NOT_PLANNED`. The second is a flag, not progress.
+`stateReason` has four values that matter, and they are four separate buckets —
+record which one each child is in, because step 9 counts them separately:
+
+| `state` / `stateReason` | Means |
+| --- | --- |
+| `CLOSED` / `COMPLETED` | Done. The only thing that counts toward completion |
+| `CLOSED` / `NOT_PLANNED` | A scope decision — a flag, not progress, and not removed from scope |
+| `CLOSED` / `""` | Closed before GitHub recorded a reason (pre-2022). Not countable as completed; say so rather than guessing |
+| `OPEN` / `REOPENED` | Was closed, is not now |
+
+Never normalize an empty `stateReason` to `COMPLETED`, however obvious the
+merged PR next to it makes the intent. The rule is `COMPLETED` or nothing, and
+the bucket is reported so nobody has to guess what was dropped.
 
 **Bound the retrieval.** The reachable set is: the linked epic(s), their
 children, those children's PRs, and dependencies those artifacts reference
@@ -385,11 +401,91 @@ The first two look identical in a table cell and are not the same finding.
 `Missing mapping` means the search never happened; `Missing tracking` means it
 happened and came back empty.
 
-### 9. Draft the rollup
+### 9. Compare against the previous snapshot
+
+Every run saves a snapshot of what it found, and reports movement against the
+previous one. `references/snapshots.md` is the contract: store layout, JSON
+schema, matching procedure, and the exact definition of each metric. Read it
+before computing anything here.
+
+**Find the baseline** in `~/.jira-github-rollup/snapshots/<JIRA-KEY>/`, newest
+filename last:
+
+```bash
+ls -1 ~/.jira-github-rollup/snapshots/<JIRA-KEY>/*.json 2>/dev/null | tail -5
+```
+
+Prefer the most recent `-published` snapshot; fall back to the most recent
+`-draft` and label it as never published. No readable snapshot means this run
+is the baseline, and the section says exactly `Baseline established — no prior
+snapshot available`. **Never reconstruct a baseline** from Jira history, issue
+dates, or an existing rollup comment — a rendered comment is prose, not data.
+
+**Match requirements on `(source key, type, verbatim text)`, never on ID.** IDs
+are per-type ordinals, so inserting one criterion renumbers every criterion below
+it; matching on IDs would report a single insertion as six changed requirements.
+
+**Compute three unweighted ratios**, each `n/d (p%)` with the fraction always
+shown:
+
+| Ratio | Numerator | Denominator |
+| --- | --- | --- |
+| Child issues completed | `state CLOSED` **and** `stateReason COMPLETED` | every distinct child, deduplicated across epics |
+| Requirements with evidence | assessment `Evidence found` | every requirement from step 2 |
+| Downstream qualification | downstream state `confirmed` | every requirement from step 2 |
+
+Hard rules on those numbers:
+
+- **`Partial evidence` gets no fractional credit** — not 0.5, not a weight. It is
+  counted in its own bucket and reported beside the ratio, with `No evidence
+  found` and `Unable to assess`.
+- **`Unable to assess` stays in the denominator.** Losing access must never look
+  like an improvement, and a missing mapping must never look like missing work.
+- **`NOT_PLANNED` children stay in the denominator** and are reported separately.
+  So are children closed with an empty `stateReason` — GitHub only began
+  recording a reason in 2022, so an older child reports none. Neither counts
+  toward completion; both are named rather than dropped.
+- **A count that could not be observed is `unknown`** — no upstream mapping, or
+  an epic whose repo returned 404. Never `0/0`, `N/A`, or `0%`; a 404 is not a
+  count of zero.
+- **A zero denominator is `N/A`** with the reason — only when the zero was
+  actually observed.
+- **Uninspected downstream state is `unknown`**, never `pending`. `pending` is a
+  claim about an artifact someone actually looked at.
+- Requirement counts stay typed. Only the aggregate may be called
+  "requirements"; never "acceptance criteria".
+
+**Classify each change by kind, separately**: added, removed, text changed,
+mapping changed, reopened, access changed, assessment changed. Then split an
+assessment change by cause, using the evidence timestamps against the baseline's
+`generatedAt`:
+
+- evidence dated **after** the baseline → **implementation progress**;
+- evidence dated **at or before** it → **newly discovered evidence** (access
+  restored, link finally added, deeper traversal — the work already existed);
+- no usable timestamp → **undetermined**, said out loud, never defaulted to
+  progress.
+
+**When the denominator moved, say so beside the percentage.** Added scope lowers
+a percentage with nothing having gone backwards, and a reader acts on the first
+clause they read. Give the like-for-like movement over requirements present and
+unchanged in both snapshots.
+
+**Never derive a rate, velocity, burn-down, or projected date.** Two unweighted
+counts support none of them.
+
+### 10. Draft the rollup
 
 Follow `references/rollup-format.md` for the exact structure and tone. Keep it
 short — a rollup that runs longer than a screen will not be read. The audience is
 a program manager scanning for risk, not an engineer reading a changelog.
+
+**Write the draft in GitHub-flavored Markdown** — `###`/`####` headings, `**bold**`
+labels, pipe tables with a `| --- |` separator row. That is what renders in the
+conversation the reviewer is reading it in. Do not draft in Jira wiki markup;
+`h3.` lines and `||` header rows render as literal punctuation here, and a
+reviewer cannot approve a table they cannot see. Markup conversion happens in
+step 12, once, and only if the Jira tool needs it.
 
 Include a generation timestamp and the epic(s) the rollup was derived from, so a
 reader can tell how stale it is and verify the source. List every epic when more
@@ -410,14 +506,50 @@ must not vary is that the status stays `Unknown — upstream mapping missing`,
 there is no Progress section, and nothing in the draft describes the work as not
 started, unimplemented, behind, or at risk.
 
-### 10. Post only after approval
+### 11. Save the snapshot
 
-Show the draft and ask whether to post. On approval, add it as a **comment** on the
-original Jira issue via `addOrEditJiraIssueComment`.
+Write what this run found to
+`~/.jira-github-rollup/snapshots/<JIRA-KEY>/<YYYYMMDDThhmmssZ>-draft.json`,
+`mkdir -p` the directory first, and use the Write tool rather than a shell
+heredoc so the JSON is not mangled by the shell. The schema is in
+`references/snapshots.md`; it carries the mappings, every requirement's verbatim
+text and type, the assessments, evidence links, downstream state, the traversal
+scope, access limitations, the UTC timestamp, and `schemaVersion`.
+
+This happens **before** approval and regardless of it. A draft-only run saves a
+draft snapshot and makes no Jira change of any kind — that is the whole reason
+the baseline lives on disk rather than in the comment.
+
+**Never overwrite or delete a snapshot.** Each run writes a new file. The next
+step may edit a Jira comment in place; the comparison baseline must survive that.
+Tell the user where the file went — a trend report whose storage is invisible is
+one the user cannot audit or reset.
+
+If the write fails, say so and continue. The rollup is what was asked for; the
+snapshot is bookkeeping, and losing it costs the next run its baseline, not this
+run its output.
+
+### 12. Post only after approval
+
+Show the draft — in GitHub-flavored Markdown, as written in step 10 — and ask
+whether to post. On approval, add it as a **comment** on the original Jira issue
+via `addOrEditJiraIssueComment`.
+
+Once the comment is posted, **promote this run's snapshot**: set `publication`
+to `published`, fill `publishedAt` and `jiraCommentId`, and rename the file's
+`-draft` suffix to `-published`. Promote only after the post actually succeeded.
+
+**Convert the markup only now, and only to what the tool accepts.** Check the
+comment tool's own parameter description and schema for the format it documents
+as its input; do not assume wiki markup, and do not assume the GFM will survive.
+`references/rollup-format.md` § Preparing the Jira payload has the conversion
+table and the plain-text fallback for when the format is unclear. Content,
+section order, and every verbatim quote stay identical — only the markup changes.
 
 If a prior rollup comment from this skill exists (identified by its trailing
-marker line), offer to edit that comment in place instead of appending a new one,
-so the issue does not accumulate near-identical updates.
+marker line — match the sentence, not its markup), offer to edit that comment in
+place instead of appending a new one, so the issue does not accumulate
+near-identical updates.
 
 Posting to Jira is outward-facing and visible to the whole project — never do it
 without the user saying yes to that specific draft.
@@ -425,6 +557,8 @@ without the user saying yes to that specific draft.
 **If the user asked for a draft, the draft is the deliverable.** Hand it over and
 stop. Asking for a draft is not approval to post, a partial draft is not a
 special case, and approval of an earlier draft never carries forward to this one.
+Saving a snapshot is not posting and does not need approval — it writes one local
+file and touches nothing in Jira.
 
 ## Failure modes to avoid
 
@@ -457,3 +591,22 @@ special case, and approval of an earlier draft never carries forward to this one
   review instead; an org-wide search produces confident wrong mappings.
 - **Burying an access failure.** An unreadable repo changes what the whole
   coverage section is worth. It goes in the Summary.
+- **Drafting in Jira markup.** The reviewer reads the draft in this conversation,
+  which renders Markdown and not `h3.` or `||`. Convert at post time, not before.
+- **Guessing the Jira comment format.** Wiki markup, ADF, and plain text are not
+  interchangeable. Read what the comment tool documents; fall back to plain text.
+- **Inventing a baseline.** No snapshot means `Baseline established — no prior
+  snapshot available`. The previous Jira comment is prose, not data, and the
+  issue's own history is not a record of what this skill found.
+- **Matching requirements by ID across runs.** IDs renumber when a criterion is
+  inserted. Match on source key, type, and verbatim text.
+- **Reporting discovery as progress.** Access restored or a link finally added
+  can move four requirements in a run with no new code. Check the evidence dates.
+- **Letting added scope read as regression.** A denominator that grew explains
+  the falling percentage, and it has to say so in the same sentence.
+- **Weighting partial coverage.** No halves, no fractions. `Partial evidence` is
+  its own count, and any weight would be a number the skill made up.
+- **Dropping `not planned` children from the denominator.** That inflates
+  completion and hides a scope decision the reader needs.
+- **Turning two data points into a forecast.** No velocity, no burn-down, no
+  projected date. The section reports movement, not a trajectory.
