@@ -40,8 +40,14 @@ occasionally commit them to an unrelated repository. A fixed home-directory path
 is stable across runs, outside any git tree, and easy for the user to inspect or
 delete.
 
-Create the directory on first write (`mkdir -p`), and write with the Write tool
-rather than a shell heredoc, so the JSON is not reinterpreted by the shell.
+`rollup.py assemble` writes the file; `rollup.py promote` is the only thing that
+rewrites one. Do not hand-write a snapshot. `$JGR_HOME` moves the whole tree,
+and `--snapshot-dir` moves one run's store, which is how the tests keep out of
+the user's real history.
+
+The sibling directory `~/.jira-github-rollup/cache/<JIRA-KEY>/` holds raw `gh`
+responses. It is **not** a snapshot store: it is overwritten freely and may be
+deleted at any time. See `references/pipeline.md`.
 
 ### Rules for the store
 
@@ -65,13 +71,15 @@ rather than a shell heredoc, so the JSON is not reinterpreted by the shell.
 
 ## Schema
 
-`schemaVersion` is `1`. Every field below is required unless marked optional;
-write `null` or `[]` rather than omitting a key, so a missing key always means a
-schema problem rather than an absent finding.
+`schemaVersion` is `2`. Version 1 is still readable — see **Reading a v1
+baseline** below. Every field is required; `null` or `[]` is written rather than
+the key omitted, so a missing key always means a schema problem rather than an
+absent finding.
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
+  "rulesVersion": "2026-10-07",
   "jiraKey": "RHOAIENG-1234",
   "generatedAt": "2026-10-05T14:22:03Z",
   "publication": "draft",
@@ -101,6 +109,8 @@ schema problem rather than an absent finding.
         "stateReason": "COMPLETED",
         "closedAt": "2026-09-18T09:02:11Z",
         "epics": ["example-org/example-gateway#412"],
+        "contentHash": "3f2a…",
+        "accessible": true,
         "prs": [
           { "ref": "example-org/example-gateway#520", "state": "merged",
             "mergedAt": "2026-09-18T08:41:00Z", "baseRef": "main" }
@@ -109,13 +119,20 @@ schema problem rather than an absent finding.
     ],
     "otherInspected": ["example-org/example-meter#9"],
     "traversalComplete": true,
-    "traversalNotes": null
+    "traversalNotes": null,
+    "observed": true,
+    "unobservedReason": null
   },
 
   "access": [
     { "ref": "example-org/example-dlp", "status": "unreadable",
       "detail": "404 for this account", "observedAt": "2026-10-05T14:21:40Z" }
   ],
+
+  "outcomes": {
+    "counts": { "met": 1, "partial": 1, "confirmed-unmet": 0, "unverified": 1 },
+    "caption": "Upstream evidence assessment, not release completion."
+  },
 
   "requirements": [
     {
@@ -133,9 +150,25 @@ schema problem rather than an absent finding.
       ],
       "downstream": { "state": "unknown", "detail": "no downstream source inspected" },
       "unresolvedClauses": [],
-      "failureKind": null
+      "outcome": null,
+      "refutingEvidence": [],
+      "failureKind": null,
+      "reused": false,
+      "assessedAt": "2026-10-05T14:22:03Z",
+      "assessedFromSnapshot": null
     }
-  ]
+  ],
+
+  "inventory": {
+    "collectedAt": "2026-10-05T14:21:58Z",
+    "inventoryHash": "9c41…",
+    "stage": "evidence",
+    "epics": [
+      { "ref": "example-org/example-gateway#412",
+        "childRefs": ["example-org/example-gateway#413"],
+        "accessible": true }
+    ]
+  }
 }
 ```
 
@@ -144,7 +177,11 @@ Field notes that are easy to get wrong:
 | Field | Rule |
 | --- | --- |
 | `generatedAt` | UTC, ISO 8601 with `Z`. The progress-versus-discovery test in the comparison depends on it being accurate, not rounded to a date. |
-| `publication` | `"draft"` until the comment is actually posted. A draft-only run writes `"draft"` and stops. |
+| `publication` | `"draft"` until the comment is actually posted. A draft-only run writes `"draft"` and stops. Only `promote` changes it, and only against a returned comment id — a failed or declined post leaves a draft. |
+| `published` | Written by `promote --published-text`: `{kind, words, hash}` for the text that actually went to Jira. `kind` is always `"summary"`; the full assessment is never posted. Absent on a draft, and absent on a promotion that did not record the text. |
+| `outcomes` | The four counts both outputs were rendered from, plus the caption that scopes them. Stored so a later reader sees what was reported without re-deriving it, and so a change in the mapping rules shows up against `rulesVersion`. Not used for matching or reuse. |
+| `requirements[].outcome` | `null` on every row except a deliberately declared `confirmed-unmet`. The other three outcomes are derived from `assessment` and are not stored per row — storing a derived value invites the two copies to drift. |
+| `requirements[].refutingEvidence` | What shows the criterion is *not* satisfied. Required for a `confirmed-unmet` claim and meaningless otherwise; `assemble` rejects the claim without it. |
 | `baseline` | What *this* run compared against, so a reader of the file can reconstruct the chain. `null` on a baseline-establishing run. |
 | `mappings[].linkSource` | One of `upstream-development-section`, `labelled-web-link`, `user-supplied`, `incidental-description`, `incidental-comment`. A mapping change that is only a change of source is still a mapping change. |
 | `children[].ref` | Always `org/repo#number`, never a bare `#number`. This is the deduplication key. |
@@ -155,12 +192,43 @@ Field notes that are easy to get wrong:
 | `requirements[].id` | Recorded for display only. **Never used for matching** — see below. |
 | `evidence[].at` | Merge date for a PR, close date for an issue. `null` when genuinely unavailable; do not substitute the run time. |
 | `downstream.state` | `confirmed`, `pending`, or `unknown`. Nothing else. |
+| `rulesVersion` | The assessment rules the stored judgements were made under. A baseline written under a different value is reassessed in full rather than reused. Bump it in `jgr/snapshots.py` whenever a change to `references/requirements.md` would change a verdict. |
+| `scope.observed` | `false` when no epic could be read at all — no mapping, or every mapping inaccessible. This is what makes the child count render `unknown` instead of a zero nobody measured, so it must never be set `true` optimistically. |
+| `scope.unobservedReason` | Why, in a phrase, when `observed` is `false`. |
+| `children[].contentHash` | Hash of the fields that constitute evidence — title, state, state reason, close date, body, and each PR's state, merge date and review state. **`updatedAt` is deliberately excluded**: a PR merging or a check flipping changes the evidence without touching the issue, and an `updatedAt` comparison would miss it. |
+| `children[].accessible` | `false` when the child could not be read this run. A child that disappears from the list is a removal; a child that stays with `accessible: false` is a loss of access, and they are different findings. |
+| `requirements[].reused` | `true` when this run carried the assessment forward rather than making it again. Provenance, not a verdict — it changes nothing a reader sees in the table. |
+| `requirements[].assessedAt` | When the judgement in this row was actually made. On a reused row this is an **earlier** run's time, not this run's; that is the point of recording it. |
+| `requirements[].assessedFromSnapshot` | The path of the snapshot a reused assessment came from, so the chain can be walked back. |
+| `inventory.inventoryHash` | Hash of the whole collected inventory. A cheap first test for "did anything at all change"; the per-child hashes say what. |
 
 A snapshot whose `schemaVersion` is unrecognized or higher than this file
 describes is not compared against. Say that the baseline exists but could not be
 read, name its date, and establish a new baseline.
 
+### Reading a v1 baseline
+
+v2 is v1 plus additive keys. Every v1 field is still written with its v1
+meaning, so an older reader sees what it always saw and **no migration step is
+required** — existing snapshot directories keep working and are not rewritten.
+
+What a v1 baseline cannot do is support reuse. It carries no `contentHash`, so
+there is no way to establish that the evidence under an assessment is unchanged,
+and `diff` reports `hashesUnavailable` and reassesses everything. That happens
+once per Jira issue: the run writes a v2 snapshot, and the run after it is
+incremental. The same is true of a v2 snapshot written under an older
+`rulesVersion`.
+
+Do not hand-edit a v1 file to add hashes. A hash you did not compute from the
+response it describes is a claim that nothing changed, which is the one thing
+the field is there to prove.
+
 ## Matching requirements across snapshots
+
+Matching, the metrics below, and the comparison after them are implemented in
+`jgr/diff.py` and `jgr/metrics.py` and run as `rollup.py diff`. This section is
+their specification: read it to interpret the output, or before changing the
+code. Do not reimplement any of it by hand in a run.
 
 Requirement IDs are ordinals assigned per type per source issue, so inserting a
 criterion at the top of a list renumbers everything under it. **Matching on IDs
@@ -253,6 +321,35 @@ that failed, and `0%` claims a result that was never obtained.
   definition-of-done items separately. Only the total may be labelled
   "requirements"; it may never be labelled "acceptance criteria".
 
+### The outcome tally
+
+The same requirements, bucketed for the reader rather than for the ratio. The
+coverage ratio above answers "what did the evidence establish"; the four
+outcomes answer "how many of the things we committed to are met". Both are
+computed from the same `assessment` field, by `jgr/outcomes.py`:
+
+| Outcome | From |
+| --- | --- |
+| `met` | `Evidence found` |
+| `partial` | `Partial evidence` |
+| `unverified` | `No evidence found`, `Unable to assess` |
+| `confirmed-unmet` | A declared `outcome` with `refutingEvidence`; never derived |
+
+- **The four are mutually exclusive and sum to the total.** `tally()` asserts
+  that rather than assuming it: a reader who adds the four numbers and gets a
+  different total has reason to distrust the whole report.
+- **`confirmed-unmet` is never inferred from absence.** "We looked and found
+  nothing" and "we looked and found that it does not work" are different
+  findings, and collapsing them turns an untracked requirement into a failed
+  one — sending a reader to argue with a team that may have shipped the work
+  somewhere nobody linked.
+- **No percentages.** The tally is counts and a caption, never `3/9 (33%)`. The
+  coverage ratio is where a percentage belongs, and even there it carries its
+  fraction.
+- The trend line compares tallies only when they are comparable. A changed
+  criteria set or changed source access is stated instead of a delta, because
+  the two tallies are not measuring the same thing.
+
 ### Downstream qualification
 
 | State | Means |
@@ -305,7 +402,9 @@ misleading one:
 | Requirement text changed | Match pass 2 |
 | Mapping changed | `mappings[]` differs — epic added, removed, or its `linkSource` changed |
 | Issue reopened | A child `CLOSED` in the baseline and `OPEN` now, or `stateReason = REOPENED` |
-| Access changed | `access[]` differs in either direction |
+| Access changed | `access[]` differs in either direction, or a child's `accessible` flips |
+| Artifact added or removed | A `ref` present on one side only |
+| Artifact content changed | `contentHash` differs — this is what catches a PR merging or a check flipping with no change to the issue |
 | Assessment changed | A matched requirement's `assessment` differs |
 
 An assessment change is then split by **what caused it**, which the evidence

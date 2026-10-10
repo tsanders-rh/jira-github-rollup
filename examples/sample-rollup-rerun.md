@@ -192,7 +192,8 @@ and all four. Full schema in
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
+  "rulesVersion": "2026-10-07",
   "jiraKey": "RHOAIENG-1234",
   "generatedAt": "2026-11-02T09:04:12Z",
   "publication": "draft",
@@ -219,6 +220,8 @@ and all four. Full schema in
         "stateReason": "COMPLETED",
         "closedAt": "2026-10-21T16:30:02Z",
         "epics": ["example-org/example-gateway#412"],
+        "contentHash": "a41c7e…",
+        "accessible": true,
         "prs": [
           { "ref": "example-org/example-controller#95", "state": "merged",
             "mergedAt": "2026-10-21T16:29:44Z", "baseRef": "main" }
@@ -231,6 +234,8 @@ and all four. Full schema in
         "stateReason": "NOT_PLANNED",
         "closedAt": "2026-10-14T11:07:55Z",
         "epics": ["example-org/example-gateway#412"],
+        "contentHash": "6b0f92…",
+        "accessible": true,
         "prs": [
           { "ref": "example-org/example-tests#22", "state": "closed",
             "mergedAt": null, "baseRef": "main" }
@@ -239,7 +244,9 @@ and all four. Full schema in
     ],
     "otherInspected": ["example-org/example-dlp#31"],
     "traversalComplete": true,
-    "traversalNotes": null
+    "traversalNotes": null,
+    "observed": true,
+    "unobservedReason": null
   },
   "access": [
     { "ref": "example-org/example-dlp", "status": "readable",
@@ -261,7 +268,10 @@ and all four. Full schema in
       ],
       "downstream": { "state": "unknown", "detail": "no downstream source inspected" },
       "unresolvedClauses": [],
-      "failureKind": null
+      "failureKind": null,
+      "reused": false,
+      "assessedAt": "2026-11-02T09:04:12Z",
+      "assessedFromSnapshot": null
     },
     {
       "sourceKey": "RHOAIENG-1240",
@@ -277,14 +287,34 @@ and all four. Full schema in
       ],
       "downstream": { "state": "unknown", "detail": "no downstream source inspected" },
       "unresolvedClauses": [],
-      "failureKind": null
+      "failureKind": null,
+      "reused": false,
+      "assessedAt": "2026-11-02T09:04:12Z",
+      "assessedFromSnapshot": null
     }
-  ]
+  ],
+  "inventory": {
+    "collectedAt": "2026-11-02T09:03:51Z",
+    "inventoryHash": "d7e5b1…",
+    "stage": "evidence",
+    "epics": [
+      { "ref": "example-org/example-gateway#412",
+        "childRefs": ["example-org/example-controller#88", "example-org/example-tests#15"],
+        "accessible": true }
+    ]
+  }
 }
 ```
 
 Note `id: "AC5"` sitting next to text that was `AC4` in the previous snapshot.
 The ID is stored for display and is never used to match — the text is.
+
+Content hashes are abbreviated here; the real file carries them in full. They
+are what makes the *next* run cheap: a child whose hash is unchanged cannot have
+moved, so the requirements resting on it keep their stored assessment, and
+`reused: true` with an earlier `assessedAt` records that it was carried forward
+rather than judged again. Both requirements above were assessed this run —
+#95 merged and the DLP repository became readable — so both read `false`.
 
 ---
 

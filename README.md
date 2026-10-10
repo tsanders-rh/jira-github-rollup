@@ -154,12 +154,37 @@ The skill will fetch the issue and its requirements, find the linked epics,
 traverse them, map each requirement to the evidence it found, and show you a
 draft. Nothing is written to Jira until you approve that draft.
 
+### How a run is split
+
+The deterministic half runs as code, so that raw API responses never enter the
+model's context and the counting rules cannot drift:
+
+```
+scripts collect and cache evidence  ─▶  scripts compute changes and metrics
+                                             │
+          scripts assemble the report  ◀─────┴──▶  the model assesses
+          and write the snapshot                   affected requirements
+```
+
+What the model does is read the Jira, quote the requirements verbatim, judge
+what the evidence establishes, and write the prose. What the scripts do is
+traverse, cache, hash, diff, count, render, and store. Raw `gh` output goes to a
+local cache; the model gets a compact manifest of identifiers, states,
+timestamps, hashes, access failures and cache paths, and reads an artifact's
+actual text only by asking for it, with any truncation reported back to it.
+
+A second run on the same issue re-collects everything, compares content hashes
+against the last snapshot, and asks for a fresh judgement only on requirements
+whose evidence could have changed — but still assembles the **complete** current
+report, reused rows included. `--full-refresh` reassesses everything.
+
 ## Requirements
 
 | Dependency | Used for | Notes |
 | --- | --- | --- |
 | `gh` CLI, authenticated | Reading epics, issues, PRs | Read-only. `repo` + `read:org` scope is enough. |
 | Atlassian MCP server | Reading the Jira issue, posting the comment | Must reach the relevant Jira site. |
+| Python 3.9+ | The collection, diff, render and snapshot scripts | Standard library only; no packages to install, no new credential. |
 
 Both need read access to every repository that hosts child issues — including
 repos the epic itself does not live in. Where access is missing, the affected
@@ -170,24 +195,37 @@ rather than quietly reducing coverage.
 
 ```
 .claude/skills/jira-github-rollup/
-  SKILL.md                      # procedure, traversal, constraints
+  SKILL.md                      # the procedure, and the invariants
+  references/pipeline.md        # commands, storage, recovery
+  references/requirements.md    # extraction and assessment — the model's half
   references/rollup-format.md   # output contract, and converting it for Jira
   references/snapshots.md       # snapshot store, schema, and trend metrics
+  scripts/rollup.py             # one CLI: refs, collect, diff, assemble, excerpt, …
+  scripts/jgr/                  # collection, caching, diff, metrics, render, snapshots
 examples/
   jira-link-section.md          # how to link an epic, and how to write criteria
   sample-rollup.md              # an illustrative generated rollup, first run
   sample-rollup-rerun.md        # the same issue four weeks later, with the trend
   ac-coverage-fixture.md        # coverage cases the rules are desk-checked against
   trend-fixture.md              # seven runs the trend rules are desk-checked against
+tests/
+  test_rollup.py                # behaviour tests over a faked `gh`
+  fakegh.py                     # a `gh` stand-in driven by a JSON world file
+  measure_run.py                # LLM-facing input size, full run vs incremental
 docs/
   poc-plan.md                   # scope, open questions, success criteria
 CLAUDE.md                       # repo conventions for Claude Code
 ```
 
-Snapshots are written outside the repo, to
-`~/.jira-github-rollup/snapshots/`. They contain verbatim Jira text, including
-criteria from private issues; they are local, unencrypted, and never
-transmitted anywhere.
+```bash
+python3 -m unittest discover -s tests
+```
+
+Outside the repo, under `~/.jira-github-rollup/` (or `$JGR_HOME`): the
+append-only snapshot store, and a cache of raw `gh` responses that may be
+deleted at any time. Snapshots contain verbatim Jira text, including criteria
+from private issues; both are local, unencrypted, and never transmitted
+anywhere.
 
 ## Status
 
