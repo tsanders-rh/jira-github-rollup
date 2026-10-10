@@ -113,3 +113,29 @@ def linkify(text):
 def unpublishable(text):
     """Every local path or file URL in a string. Empty list means safe to post."""
     return [match.group(0) for match in UNPUBLISHABLE.finditer(text or "")]
+
+
+def safe_url(url):
+    """A URL only if it is an absolute `http(s)` one. Otherwise None.
+
+    An allow-list, not a deny-list, and it governs two different hazards.
+
+    In the HTML report, a ref carried out of an issue body could be
+    `javascript:` or `data:`, and either in an `href` is script execution in a
+    file the reader was told was a report.
+
+    In the Jira summary, the hazard is quieter: a relative path like
+    `full-assessment.html` is neither a local path nor a file URL, so
+    `unpublishable` passes it, and it renders as a link that resolves against
+    the Jira host and 404s for everyone. A local HTML file is not a durable
+    link and must not be published as one.
+    """
+    if not url:
+        return None
+    candidate = str(url).strip()
+    lowered = candidate.lower()
+    if not (lowered.startswith("http://") or lowered.startswith("https://")):
+        return None
+    if any(char in candidate for char in "\n\r\t"):
+        return None
+    return candidate

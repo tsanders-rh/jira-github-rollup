@@ -17,6 +17,7 @@ The world file is a dict of:
     missing     ["org/repo#3", "org/other"]   -> 404
     forbidden   ["org/private"]               -> 403
     noSubIssues ["org/legacy"]                -> 404 on /sub_issues only
+    forbiddenSubIssues ["org/repo#3"]         -> 403 on /sub_issues only
 
 `noSubIssues` is the repo that has never had GitHub's sub-issue feature. It
 404s that one endpoint while reading normally, which is the case where "no
@@ -110,6 +111,11 @@ def main(argv):
         if kind == "sub_issues":
             if repo in data.get("noSubIssues", []):
                 fail("HTTP 404: Not Found (sub-issues unavailable)")
+            # A readable issue whose sub-issue list is refused. Distinct from
+            # `forbidden`, which blocks the issue too: this is the shape that
+            # used to come back as "no children" and hide a whole branch.
+            if ref in data.get("forbiddenSubIssues", []):
+                fail("HTTP 403: Resource protected by organization SAML enforcement")
             refs = data.get("subIssues", {}).get(ref, [])
             emit(
                 [

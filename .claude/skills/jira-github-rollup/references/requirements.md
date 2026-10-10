@@ -175,6 +175,11 @@ ask again.
   that criterion rather than falling back to merge state as proof.
 - **"No evidence found" is never "not implemented."** Scope it to what you
   looked at: "no evidence in example-org/example-gateway#412 and its children."
+  "No upstream issue covers this" is a claim about every repository on GitHub,
+  made from a walk of one epic; `assemble` rejects it in a `gap`, a
+  `coverageDetail`, a note or either rendered output. Write "no upstream work
+  in the traversed set is linked to …", and if a nested epic went untraversed
+  this run, that is part of what the claim is scoped to.
 - **A missing mapping is never missing implementation.** You inspected nothing,
   so you know nothing about the state of the work.
 - **Scope every absence claim** to the sources inspected. Partial traversal
@@ -187,6 +192,26 @@ ask again.
 - **Do not invent** issue links, test results, owners, review commitments or
   target dates. If no owner is identified, write "owner not identified in the
   sources inspected."
+
+### Criteria something inspected contradicts
+
+`confirmed-unmet` is the one outcome declared by hand — `"outcome":
+"confirmed-unmet"` plus `refutingEvidence` naming what shows the criterion is
+not satisfied. It is a finding, not a schedule item, and it is never inferred
+from absence.
+
+What it is also not is a recommendation. "Reopen the work" and "revise the
+criterion" are two possible answers to a question nobody has asked yet, and
+picking one from an assessment row commits someone else's team to a decision on
+the strength of a table cell. Two sources can both be accurate and still
+disagree about what should happen: an issue proposing to reject a combination
+and a criterion requiring the combination to work are a product question, not a
+defect in either.
+
+So state the question. "Confirm whether the criterion still describes intended
+behaviour" is the item, and the evidence that raised it goes beside it. Put the
+clarification first, the options after, and only where a source you read
+actually named one.
 
 ### Downstream qualification, separately
 

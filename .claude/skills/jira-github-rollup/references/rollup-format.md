@@ -18,25 +18,34 @@ acceptance criterion (`AC`), success criterion (`SC`), definition-of-done item
 output; it is never dropped, and the types are never added together under the
 label "acceptance criteria".
 
-## Two outputs from one assessment
+## One assessment, rendered three ways
 
-`rollup.py assemble` renders two documents from the same merged assessment and
-the same tally. They have different jobs and different readers:
+`rollup.py assemble` renders from one merged assessment and one tally. The
+renderings have different jobs and different readers:
 
 | | Audience | Length | Posted? |
 | --- | --- | --- | --- |
 | **Full assessment** (`--report`) | An engineer reviewing the evidence, in this conversation | As long as the evidence needs | Never |
 | **Jira summary** (`--summary`) | An EM or exec scanning the issue | 150–250 words of prose | Only this one, only on explicit approval |
+| **HTML full assessment** (`--html`) | Someone reading or forwarding it outside this conversation | The full assessment, with the evidence behind disclosures | Never; it is a file, not a link |
 
-Both are GitHub-flavored Markdown, because that is what the conversation renders
-*and* what the Jira comment tool documents as its default input. A reviewer
-asked to approve wiki markup in a terminal is approving a wall of punctuation
-rather than the table they will get.
+The first two are GitHub-flavored Markdown, because that is what the
+conversation renders *and* what the Jira comment tool documents as its default
+input. A reviewer asked to approve wiki markup in a terminal is approving a wall
+of punctuation rather than the table they will get.
 
-**The two can never disagree.** They are built from one `outcomes.tally()` call,
-and `assemble.cross_check` refuses to emit them if the outcome row is absent
-from either or if the counts do not sum to the criteria total. Do not hand-edit
-one to match the other — fix the assessment and re-render.
+**They can never disagree.** All three are built from one `outcomes.tally()`
+call, and `assemble.cross_check` refuses to emit anything if the outcome row is
+absent from one of them or if the counts do not sum to the criteria total. The
+HTML is checked twice over: its by-type rows come from `metrics.by_type` and its
+totals from `outcomes.tally`, so a type whose rows do not add up fails the run
+even though both numbers are individually right. Do not hand-edit one rendering
+to match another — fix the assessment and re-render.
+
+The HTML is rendered on **every** run whether or not `--html` asked for a file,
+so the cross-check covers it every time rather than only on the runs that happen
+to write it out. It never goes to stdout: `result.json` reports `htmlBytes`, and
+`htmlPath` only when a path was named.
 
 The split is about detail, not about honesty. Everything in the summary is also
 in the full assessment. What stays out of the summary is the per-criterion
@@ -132,6 +141,15 @@ _Upstream evidence assessment, not release completion. 3 criteria in total; the
 four columns are mutually exclusive and sum to that. These are the same counts
 the Jira summary carries._
 
+| Type | Total | Outcomes met | Partial | Confirmed unmet | Unverified |
+| --- | --- | --- | --- | --- | --- |
+| Acceptance criteria | 2 | 1 | 1 | 0 | 0 |
+| Definition-of-done items | 1 | 0 | 0 | 0 | 1 |
+
+_Counted separately by type. They are not summed into a completion figure: an
+acceptance criterion, a success criterion and a definition-of-done item are not
+interchangeable units of delivery._
+
 | Requirement | Outcome | Evidence | Evidence state | Coverage | Gap / next validation step |
 | --- | --- | --- | --- | --- | --- |
 | AC1 (RHOAIENG-1234) "<verbatim text>" | Met | org/repo#413, org/repo#520 (merged 2026-09-18) | merged | Evidence found — <what the evidence establishes> | <what remains, or "—"> |
@@ -140,8 +158,18 @@ the Jira summary carries._
 
 #### Downstream qualification
 
-- AC1 (RHOAIENG-1234) — <what is still required downstream, or that downstream
-  state was not inspected>
+| Qualification | Criteria |
+| --- | --- |
+| Verified, with evidence | 0 |
+| Inspected; no qualifying evidence found | 1 |
+| Not inspected | 2 |
+
+_Qualification is a separate question from upstream coverage, and neither is a
+release-readiness verdict. A criterion with upstream evidence and no
+qualification is not partly released._
+
+- **Not inspected.** AC1 (RHOAIENG-1234) — <what is still required downstream,
+  or that downstream state was not inspected>
 
 #### Dependencies, decisions, and tracking gaps
 
@@ -157,13 +185,21 @@ the Jira summary carries._
 
 - Jira sources read for requirements: description, sub-tasks.
 - Traversed 1 epic, 23 child issues across 3 repositories.
-- Not traversed: org/repo#1445 looks like a nested epic; it was recorded but not
-  traversed.
+- **Not traversed:** [org/repo#1445](…) — <title>. Identified as a nested epic
+  (task-list); reached only by timeline-cross-reference, which establishes a
+  mention rather than membership.
+- Criteria owned by work beneath the epics above are not in this assessment at
+  all. Any row below reading as unevidenced may be covered there: that is a
+  limit of the traversal, not a finding about the work.
 - Not readable: org/other#40 (404) — <detail>.
 - Evidence basis: issue and pull-request metadata, changed-file lists, and CI
   check results. No diffs were read, so a changed file or a passing job locates
   the work; it does not by itself verify a behaviour.
 - No downstream build, payload, or qualification run was inspected.
+
+The discovery relation appears once on a **Not traversed** line. The mention
+reason names it already; the depth-cap reason (`already 1 level below the
+mapped epic`) does not, so `render` adds `reached by <relation>` only there.
 
 #### Coverage caveats
 
@@ -234,48 +270,112 @@ progress bar.
 
 _Upstream evidence assessment, not release completion. 3 criteria in total._
 
-- Progress: <criterion> met ([PR repo#520](...)); <criterion> partly supported.
-- Remaining: <criterion> tracked and incomplete ([issue repo#88](...));
-  downstream qualification was not inspected for AC1.
-- Attention needed: no upstream work in the traversed set is linked to
-  RHOAIENG-1234 SC6 — identify and link the work covering SC6; a decision is
-  open on SC4 — the retention window is given as TBD.
-- Next: link the owning issue or epic for SC6; record the open decision on SC4.
-  No owner or date for these is recorded in the sources inspected.
+_Scope: 2 acceptance criteria, 1 definition-of-done item, counted separately._
 
-Trend: since the last update posted here on 2026-10-01, outcomes met 1→3,
+- **Evidence established:** Tier-based pool selection routes paid-tier requests
+  and merged on 2026-09-18 ([RHOAIENG-1234 AC1](...); [PR example-quota#520](...)).
+- **Remaining work:** Per-tier metering is tracked but unimplemented; the
+  counter increments on admission only ([RHOAIENG-1234 AC2](...);
+  [issue example-quota#88](...)).
+- **Decisions needed:** Whether a denied request is metered is unrecorded, so
+  the retention clause cannot be checked ([RHOAIENG-1234 DoD1](...)).
+- **Next actions:** Record the metering decision and link the owning work for
+  the 1 criterion with none. No owner or date for these is recorded in the
+  sources inspected.
+
+**Trend:** since the last update posted here on 2026-10-01, outcomes met 1→3,
 unverified 4→2.
 
-Scope: 2 nested epics were recorded but not traversed. Criteria owned by that
-work would not appear here, so an unverified row is not evidence that the work
-is missing.
+**Scope:** 2 nested epics were recorded but not traversed
+([org/repo#1445](...), [org/repo#1501](...)). Criteria owned by that work would
+not appear here, so an unverified row is not evidence that the work is missing.
 
 [Full assessment](https://durable.example/rollups/RHOAIENG-1234.md)
 ````
 
-The rules, all enforced in `summary.py`:
+### The four bullets
 
-- **150–250 words**, counting prose only — URLs and the outcome table are
-  scanned, not read, so neither inflates the count. Over budget, the renderer
-  names fewer criteria per bullet rather than dropping a bullet. All four
-  bullets are always present: a summary missing "Attention needed" is a
-  different document, not a shorter one.
-- **Four bullets, fixed order and fixed labels.** Progress, Remaining,
-  Attention needed, Next.
-- **Every "Attention needed" item carries a criterion, a pointer and an
-  action.** "A decision is open on SC4" sends the reader away to find out
-  which; the clause itself is named. A `confirmed-unmet` criterion appears
-  here, with what refutes it — never in Remaining, where "tracked and
-  incomplete" would file a thing found to be wrong alongside work still in
-  flight.
-- **The trend names its baseline in the reader's terms** — "the last update
-  posted here on <date>", or "the last assessment on <date>, which was not
-  posted here". Movement since the last comment and movement since the last
-  time anyone looked are different claims, and "draft snapshot" is this tool's
-  vocabulary, not a Jira reader's.
-- **1–2 targeted links per bullet**, with descriptive labels (`PR example-gateway#1605`, not
-  a bare URL and not "click here"). The full inventory stays in the detailed
-  assessment.
+**Fixed order, fixed labels, always all four.** A summary missing "Decisions
+needed" is a different document, not a shorter one. The slug is what a
+narrative claim is filed under; the label is what the reader sees.
+
+| Slug | Label | Answers |
+| --- | --- | --- |
+| `evidence-established` | Evidence established | What the inspected sources show has been built |
+| `remaining-work` | Remaining work | What is identified and outstanding |
+| `decisions-needed` | Decisions needed | What nobody has decided, and what inspected evidence contradicts |
+| `next-actions` | Next actions | What to do, with owners and dates only where a source named one |
+
+A `confirmed-unmet` criterion belongs under **Decisions needed**, with what
+refutes it — never under Remaining work, where "tracked and incomplete" would
+file a thing found to be wrong alongside work still in flight. And the finding
+raises a question; it does not answer one. "Confirm whether the criterion still
+describes intended behaviour" is the item. "Reopen the work" and "revise the
+criterion" are two possible answers to that question and neither is yours to
+pick from an assessment row.
+
+### Narrative, and what the model owes for it
+
+The bullets carry prose the model wrote. Mechanical counts are the fallback for
+a bullet nobody wrote, not the goal: a reader who wanted the tally has it two
+lines above, and "4 criteria partly supported: AC1, AC3, SC2, DoD1" tells an EM
+nothing about what the system now does.
+
+Supply it as `assembly["narrative"]`, or as `--narrative narrative.json`:
+
+```json
+[
+  {"bullet": "evidence-established",
+   "text": "Tier-based pool selection routes paid-tier requests and merged on 2026-09-18",
+   "refs": [{"sourceKey": "RHOAIENG-1234", "id": "AC1"}],
+   "links": ["example-org/example-quota#520"]}
+]
+```
+
+Several claims may share a bullet; they are rendered as consecutive sentences
+in the order given, each with its own traceability tail.
+
+`summary.py:narrative_problems` refuses the run when a claim cites a
+requirement that is not in this assessment, cites no row at all, links an
+artifact that is not evidence on any row it cites, is filed under
+`evidence-established` while resting on an `unverified` row, or names a bullet
+that does not exist. **Those checks establish traceability, not truth.** A
+sentence that misreads what a merged PR does passes all of them. Whether the
+evidence establishes the claim is a judgement and it stays with you.
+
+### Readability at scale
+
+Nine criteria and forty-nine criteria are the same document. Three rules keep
+it that way, all enforced in `summary.py`:
+
+- **A criterion is named explicitly in at most one bullet.** After that it is
+  counted. The same eight ids under three headings reads as twenty-four
+  problems, and the bullet that was meant to say what to *do* repeats what the
+  reader already has.
+- **At most three explicit references per bullet.** The rest collapse to counts
+  grouped by owning issue: `RHAIGW-399 AC1, RHAIGW-399 AC6, RHAIGW-400 AC2, and
+  7 more — 4 on RHAIGW-400, 3 on RHAIGW-401`. Past three, the enumeration stops
+  being a pointer and becomes the content. The tail carries no brackets of its
+  own; the whole trace is already parenthesised after the sentence.
+- **Every reference is qualified with its source key.** `AC1` is ambiguous
+  across six Jira issues. `RHAIGW-399 AC1` is not. This holds in both outputs,
+  including the collapsed-row line in the full assessment.
+
+The complete per-criterion lists live in the full assessment, which is the
+document that has room for them.
+
+### The rest of the contract
+
+- **150–250 words** of prose; URLs and the tables are scanned, not read, so
+  neither counts. Over budget, the renderer names fewer criteria per bullet.
+  It never truncates narrative and never drops a bullet — `result.json` reports
+  `summaryWordBudget.within` instead, because a half-finished claim is worse
+  than a long one.
+- **`_Scope:_` counts AC, SC and DoD separately** and never sums them. There is
+  no feature-completion percentage in either output.
+- **1–2 targeted links per bullet**, with descriptive labels (`PR
+  example-gateway#1605`, not a bare URL and not "click here"). The full
+  inventory stays in the detailed assessment.
 - **What a link points at depends on the outcome.** For `met` or `partial`, the
   artifact that landed the work — strongest first: merged PR, closed issue, open
   PR. For anything else, the issue that *owns* the work — open issue first,
@@ -285,17 +385,98 @@ The rules, all enforced in `summary.py`:
   the parent issue and naming the criterion in the link text: `RHOAIENG-1234 SC5`.
   This needs `jira.site` in the assembly; without it the text is unlinked rather
   than linked to a guess.
-- **Owners and dates appear only where a source established one.** The Next
-  bullet ends by saying none is recorded rather than leaving the omission to be
-  read as "nobody is on it".
-- **The scope caveat is one sentence and conditional** — unreadable sources,
-  untraversed nested epics, or incomplete traversal. It exists so an unverified
-  count is not read as a finding about the work.
+- **The trend names its baseline in the reader's terms** — "the last update
+  posted here on <date>", or "the last assessment on <date>, which was not
+  posted here". Movement since the last comment and movement since the last
+  time anyone looked are different claims, and "draft snapshot" is this tool's
+  vocabulary, not a Jira reader's.
+- **A changed criteria set is reported as scope, not movement.** When the total
+  moved, the trend line gives the scope change and says the outcome counts are
+  not comparable across it. `unverified 4→21` beside "since the last
+  assessment" reads as twenty-one things going wrong; the like-for-like figure
+  over criteria present in both runs is in the full assessment, which has room
+  to qualify it.
+- **The scope caveat is conditional and names what it omits** — unreadable
+  sources, nested epics recorded but not traversed, or incomplete traversal,
+  each by reference. It exists so an unverified count is not read as a finding
+  about the work.
 - **The "Full assessment" link is omitted unless a durable, reader-accessible
   URL was supplied.** A local path is dropped, not published; `links.py` and
   `assemble.cross_check` both refuse one.
+- **No existence claim is left unscoped.** "No upstream issue covers this" is a
+  statement about every repository on GitHub, made from a walk of one epic.
+  `assemble.unscoped_claims` rejects it in either output; write "no upstream
+  work in the traversed set is linked to …".
 - **No collection diagnostics, no authentication notes, no per-criterion
   analysis.** Those are what the full assessment is for.
+
+## Structure of the HTML full assessment
+
+`jgr/htmlreport.py` emits it; `jgr/htmlassets.py` holds the stylesheet and the
+script. Written when `rollup.py assemble` or `rollup.py rerender` is given
+`--html <path>`. Nothing in either module classifies a criterion, decides what
+evidence shows, or writes prose — every sentence of judgement in the output
+arrived in the assembly, which is what makes re-rendering an old snapshot safe.
+
+Seven sections, in this order:
+
+| | Contains |
+| --- | --- |
+| **Header** | Requirement title, linked Jira key, assessment date, draft-or-published state, the linked upstream epics, and the expand/collapse control |
+| **Limitations banner** | Incomplete traversal, unreadable sources, an uncomputable coverage ratio, a missing mapping. **Omitted entirely when there are none** |
+| **Overview** | Left: outcome counts by requirement type. Right: release target, baseline, scope change, comparable movement, child-issue ratio |
+| **Decisions and follow-up** | The narrative claims under their four bullet labels, with qualified criterion references and the links they were validated against; then dependencies a source actually named |
+| **Requirement review** | Criteria grouped by source Jira issue, searchable and filterable, each row expanding to its evidence |
+| **Changes since baseline** | Outcome movement for matched requirements, scope change kept separate |
+| **Collection scope and limitations** | Sources read, repositories traversed, nested epics skipped, access failures, timestamps, rules and schema version |
+
+What the HTML is strict about, beyond the shared tally:
+
+- **No combined completion figure.** The outcome card is counts by type with no
+  denominator and no percentage, because the three types are not interchangeable
+  units of delivery.
+- **Movement is withheld rather than approximated.** When the requirement
+  inventory changed, the card says numerical movement is unavailable and why,
+  instead of printing a ratio whose denominator moved. Scope growth is labelled
+  scope, never progress.
+- **Missing is said to be missing.** No field falls back to a plausible value.
+  An unrecorded release target reads "Not recorded on the Jira issue"; an
+  uninspected downstream step reads "Not inspected" and says that is not
+  confirmation none is required.
+- **Scope change is reported only against a baseline.** A first run's diff lists
+  every criterion as added, which is true of the file and false of the work.
+- **Evidence state is glossed from what collection records** — `planned`,
+  `in progress`, `in review`, `merged`, `tested`. *Documented* and *test
+  present* are not states this pipeline can distinguish, so they are never
+  reported, and the collection section says so.
+- **File references are commit-pinned or omitted.** A path without a recorded
+  commit points at whatever that file says today, which is not what was read.
+
+### Safety properties of the HTML
+
+Jira and GitHub content is untrusted input. The renderer treats it that way:
+
+- Every source string goes through `htmlreport.text()` → `html.escape(...,
+  quote=True)`. There is no second path, because there is **no embedded JSON
+  payload and no client-side templating** — every row is static escaped markup
+  carrying `data-*` attributes, and the script only toggles `hidden` and `open`.
+- Every URL goes through `links.safe_url()`, which admits absolute `http` and
+  `https` and nothing else. A `javascript:`, `data:` or `file:` ref recorded
+  upstream renders as inert text rather than as a link. External links carry
+  `rel="noreferrer noopener"`.
+- `links.unpublishable()` runs over the finished document in
+  `assemble.cross_check`, so a cache path or a home directory fails the run
+  rather than shipping in a file someone forwards.
+- Nothing leaves the document at runtime: no font import, no CDN, no `fetch`,
+  one inline `<script>`. It opens on a laptop with no network.
+
+Interaction is native and keyboard-accessible: `<details>`/`<summary>` rows that
+work with JavaScript off, a `<input type="search">`, two `<select>`s and a
+checkbox. The live count and each group heading both update under a filter —
+a heading left at its unfiltered total is how a reader concludes a source has
+nine criteria needing attention when it has two. The print stylesheet opens
+every row, unclamps the finding text, drops the controls, and appends each
+link's URL in parentheses.
 
 ## Structure when no upstream mapping exists
 
@@ -477,6 +658,13 @@ The counts line above the table is by type (`3 acceptance criteria, 1
 definition-of-done item`). Never give a single total labelled as acceptance
 criteria.
 
+Below the caption, `render.type_breakdown` splits the same four outcomes by
+type whenever more than one type is present. It has no total column and no
+percentage on purpose: eight met acceptance criteria beside zero met success
+criteria is a different situation from the reverse, both read as "8 of 16", and
+dividing across the types would produce exactly the feature-completion number
+this whole design refuses to emit.
+
 Above 12 requirements the table stops being read, which is the same failure as a
 rollup longer than a screen. Keep every row that is not `Evidence found`, and
 collapse the rest into one line (`4 further requirements assessed Evidence found
@@ -533,10 +721,26 @@ derives the first from the second.
   `Unable to assess` on a criterion that was half-checkable discards work already
   done.
 
-**Downstream qualification** — one bullet per requirement that still needs
-downstream integration or qualification, including those whose upstream coverage
-is `Evidence found`. Merged upstream is not shipped downstream, and the reader
-needs the two separated.
+**Downstream qualification** — a three-state table, then one bullet per
+requirement that still needs downstream integration or qualification, including
+those whose upstream coverage is `Evidence found`. Merged upstream is not
+shipped downstream, and the reader needs the two separated.
+
+The three states are not interchangeable and the labels are deliberately long:
+
+| `downstream.state` | Rendered as | Means |
+| --- | --- | --- |
+| `unknown` | Not inspected | Nobody looked. An open question. |
+| `pending` | Inspected; no qualifying evidence found | Somebody looked and found nothing. A negative result. |
+| `confirmed` | Verified, with evidence | A named build, payload or run establishes it. |
+
+Reading the first as the second overstates what is known; reading the second as
+the first understates it. `unknown` is the default and stays there until a
+source says otherwise — a criterion nobody checked downstream is not pending.
+
+Neither this table nor the outcome counts is a release-readiness verdict. That
+is what `Delivery confidence` is for, and it is `Not assessed` for as long as
+any of this is outstanding.
 
 Close the section with the scope of the claim when it applies:
 

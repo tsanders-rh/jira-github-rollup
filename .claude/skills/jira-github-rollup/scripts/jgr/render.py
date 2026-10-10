@@ -17,6 +17,7 @@ from . import links as links_mod
 from . import metrics as metrics_mod
 from . import outcomes as outcomes_mod
 from . import scope as scope_mod
+from . import summary as summary_mod
 from . import util
 
 TYPE_LABEL = {
@@ -309,6 +310,44 @@ def outcome_table(tallied):
     ]
 
 
+def type_breakdown(requirements):
+    """The same outcomes split by requirement type, with no combined score.
+
+    Acceptance criteria, success criteria and definition-of-done items answer
+    different questions, and the pooled table above hides which kind is
+    lagging: eight met acceptance criteria and zero met success criteria is a
+    different situation from the reverse, and both read as "8 of 16". There is
+    deliberately no total column and no percentage - dividing across the types
+    would produce a feature-completion number, which none of these measure.
+    """
+    groups = metrics_mod.by_type(requirements)
+    if len(groups) < 2:
+        return []
+    header_cells = ["Type", "Total"] + [outcomes_mod.LABELS[n] for n in outcomes_mod.OUTCOMES]
+    lines = [
+        "",
+        "| " + " | ".join(header_cells) + " |",
+        "| " + " | ".join("---" for _ in header_cells) + " |",
+    ]
+    for group in groups:
+        singular, plural = TYPE_LABEL.get(group["type"], (group["type"], group["type"]))
+        name = singular if group["total"] == 1 else plural
+        lines.append(
+            "| {} | {} | {} |".format(
+                cell(name.capitalize()),
+                group["total"],
+                " | ".join(str(group["outcomes"][n]) for n in outcomes_mod.OUTCOMES),
+            )
+        )
+    lines.append("")
+    lines.append(
+        "_Counted separately by type. They are not summed into a completion figure: an "
+        "acceptance criterion, a success criterion and a definition-of-done item are not "
+        "interchangeable units of delivery._"
+    )
+    return lines
+
+
 def coverage_section(assembly, computed, tallied=None):
     requirements = assembly["requirements"]
     site = (assembly.get("jira") or {}).get("site")
@@ -331,6 +370,7 @@ def coverage_section(assembly, computed, tallied=None):
         "mutually exclusive and sum to that. These are the same counts the Jira summary "
         "carries._"
     )
+    lines.extend(type_breakdown(requirements))
     lines.append("")
     lines.extend(
         [
@@ -367,7 +407,10 @@ def coverage_section(assembly, computed, tallied=None):
             )
         )
     if collapse:
-        ids = ", ".join(r.get("id") for r in collapsible)
+        # Qualified, because the collapsed list is the one place a reader gets
+        # ids without the row that says which Jira issue they came from, and
+        # `AC1` on its own belongs to five issues in a multi-issue rollup.
+        ids = ", ".join(summary_mod.qualified(r) for r in collapsible)
         lines.append("")
         lines.append(
             f"{len(collapsible)} further requirements assessed Evidence found with no "
@@ -392,9 +435,13 @@ def downstream_section(assembly):
         return []
     site = (assembly.get("jira") or {}).get("site")
     lines = ["#### Downstream qualification", ""]
+    lines.extend(downstream_states(requirements))
+    lines.append("")
     for requirement in listed:
+        state = ((requirement.get("downstream") or {}).get("state") or "unknown").lower()
         lines.append(
             f"- {criterion_label(requirement, site)} {EMDASH} "
+            f"**{metrics_mod.DOWNSTREAM_LABELS.get(state, metrics_mod.DOWNSTREAM_LABELS['unknown'])}.** "
             f"{links_mod.linkify((requirement.get('downstream') or {}).get('detail'))}"
         )
     if len(listed) < len(requirements):
@@ -405,6 +452,34 @@ def downstream_section(assembly):
                 "inspected; that is not confirmation that none is required.",
             ]
         )
+    return lines
+
+
+def downstream_states(requirements):
+    """How far qualification got, in three states that are not interchangeable.
+
+    Upstream coverage and release readiness are separate questions and this
+    table only answers part of the second one. The distinction worth protecting
+    is between "not inspected" and "inspected, nothing found": the first is an
+    open question, the second is a negative result, and a reader who reads one
+    as the other either over- or under-states what is known.
+    """
+    counts = {name: 0 for name in metrics_mod.DOWNSTREAM}
+    for requirement in requirements or []:
+        state = ((requirement.get("downstream") or {}).get("state") or "unknown").lower()
+        counts[state if state in counts else "unknown"] += 1
+    lines = [
+        "| Qualification | Criteria |",
+        "| --- | --- |",
+    ]
+    for state in metrics_mod.DOWNSTREAM:
+        lines.append(f"| {metrics_mod.DOWNSTREAM_LABELS[state]} | {counts[state]} |")
+    lines.append("")
+    lines.append(
+        "_Qualification is a separate question from upstream coverage, and neither is a "
+        "release-readiness verdict. A criterion with upstream evidence and no qualification "
+        "is not partly released._"
+    )
     return lines
 
 
@@ -460,8 +535,11 @@ def dependencies_section(assembly):
         lines.append(
             f"- **Tracking clarification** {EMDASH} no upstream work in the traversed set maps "
             f"to {criterion_label(requirement, site)}. Identify and link the work covering "
-            f"{requirement.get('id')}"
-            + (f" on {key}" if key else "")
+            # The criterion's own source key, not the rollup's. In a rollup
+            # over several Jira issues these differ, and naming the parent
+            # sends the reader to the wrong issue to find an `AC1` that five
+            # of them have.
+            f"{summary_mod.qualified(requirement)}"
             + ". Absence in the sources inspected is not a finding that the work does not exist."
         )
 
@@ -516,14 +594,31 @@ def scope_section(assembly):
             f"{util.pluralize(repos, 'repository', 'repositories')}."
         )
 
-    notes = manifest.get("traversalNotes") or []
-    for note in notes:
-        lines.append(f"- Not traversed: {links_mod.linkify(note)}")
-    if notes:
+    # Untraversed branches first, and named individually. A note saying a
+    # nested epic was traversed and a note saying one was not used to be
+    # rendered under the same "Not traversed:" prefix, which made the
+    # limitation unreadable precisely where it mattered most.
+    untraversed = manifest.get("untraversed") or []
+    for entry in untraversed:
+        title = f" {EMDASH} {cell(entry.get('title'))}" if entry.get("title") else ""
+        reason = entry.get("reason") or "no reason recorded"
+        # The mention reason already names the relation it came in on; the
+        # depth-cap reason does not. Stating it twice in one sentence reads as
+        # two separate facts, which is how a reader stops trusting the line.
+        via = entry.get("discoveredVia")
+        seen = f", reached by {via}" if via and via not in reason else ""
         lines.append(
-            "- Criteria owned by the work above would not appear in this assessment at all. "
-            "That is a limit of the traversal, not a finding about the work."
+            f"- **Not traversed:** {links_mod.link(entry.get('ref'))}{title}. Identified as a "
+            f"nested epic ({entry.get('nestedVia')}){seen}; {reason}."
         )
+    if untraversed:
+        lines.append(
+            "- Criteria owned by work beneath the epics above are not in this assessment at "
+            "all. Any row below reading as unevidenced may be covered there: that is a limit "
+            "of the traversal, not a finding about the work."
+        )
+    for note in manifest.get("traversalNotes") or []:
+        lines.append(f"- Traversal: {links_mod.linkify(note)}")
 
     unreadable = [entry for entry in manifest.get("access") or [] if entry.get("status") != "readable"]
     for entry in unreadable:

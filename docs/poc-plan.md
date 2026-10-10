@@ -595,3 +595,120 @@ reasoning.
   Jira comment and must never be able to edit what was judged.
 
   No behaviour changed here; the documentation was wrong about the code.
+- *2026-10-10* — **The Jira summary carries narrative, and every claim in it
+  names the rows it rests on.** The bullets were mechanical lists of criterion
+  ids, and a real run against a six-issue requirement produced a summary that
+  was arithmetically perfect and useless to the audience it is for: a manager
+  cannot act on "4 criteria partly supported: AC1, AC3, SC2, DoD1". A shared
+  tally guarantees consistent arithmetic, not correct interpretation, and the
+  model is already making the interpretation — it was just not allowed to write
+  it down.
+
+  `assembly["narrative"]` (or `--narrative`) now carries one entry per claim:
+  the bullet it belongs under, the sentence, the `(sourceKey, id)` rows it
+  rests on, and the artifacts it links. `summary.narrative_problems` refuses
+  the run when a claim cites a row that is not in this assessment, cites no row
+  at all, links an artifact no cited row carries, or is filed under "Evidence
+  established" while resting on an `unverified` row. The snapshot stores the
+  narrative, so `rerender` reproduces the text that was approved.
+
+  **Those checks establish traceability, not truth,** and there is a test
+  asserting that a traceable-but-wrong claim still passes, so nobody later
+  reads the validator as a fact checker. Judging the evidence stays in prose
+  per the split in `CLAUDE.md`; only the structural half moved into code.
+
+  Three readability rules came with it, because the same renderer has to work
+  at 9 criteria and at 49: a criterion is named in at most one bullet and
+  counted everywhere after, at most three explicit references appear per bullet
+  with the remainder collapsed to counts grouped by owning issue, and every
+  reference is qualified with its source key. A rollup spanning six Jira issues
+  has six rows called `AC1`; a bare `AC1` pointed at none of them. The word
+  budget is now reported (`summaryWordBudget`) rather than enforced — the
+  renderer shrinks mechanical detail to fit and never truncates a claim.
+- *2026-10-10* — **Supersedes the "Attention needed" entry above: a contradicted
+  criterion raises a question, it does not answer one.** The previous fix moved
+  `confirmed-unmet` out of Remaining, which was right, but rendered it as
+  "decide whether to reopen the work or revise the criterion" — two possible
+  answers, picked before anyone asked. The real case that prompted this had an
+  issue proposing to reject a configuration and a criterion requiring it to
+  work: both accurate, neither defective, and the open question was a product
+  one. The bullet (now **Decisions needed**) states the question — does the
+  criterion still describe intended behaviour — and leaves the answer to the
+  people who own it. The four bullets are now `evidence-established`,
+  `remaining-work`, `decisions-needed`, `next-actions`.
+- *2026-10-10* — **Nested epics are traversed one level when a declared
+  relation found them.** A run against a real six-issue requirement recorded a
+  nested epic and stopped, and six criteria were reported with no upstream
+  coverage when the work plausibly sat beneath it. Traversal now descends one
+  further level through `sub-issue` and `task-list` only
+  (`collect.DECLARED_RELATIONS`), with a visited set, a depth cap and
+  grandchildren attributed to the nested epic.
+
+  The rule keys on the **discovery relation**, not on nesting. A
+  `timeline-cross-reference` establishes that something mentioned the epic
+  once; descending through one would attach an unrelated tree of issues to this
+  Jira issue's criteria, and every row they touched would be assessed against
+  work nobody claimed was in scope. Everything left alone goes in
+  `manifest.untraversed` as structured entries with the reason, which both
+  renderings read — the full assessment names each one, the summary's scope
+  caveat counts them. A limitation that existed only as free-text prose was one
+  a reader could miss, and every absence claim in the run is scoped to it.
+
+  A `403` on the sub-issue list of a readable issue is now recorded as a
+  limitation rather than returning an empty child list, which used to hide a
+  whole subtree behind "this epic has no children".
+- *2026-10-10* — **Counts are qualified before they are compared.** Three
+  related changes, all for the same failure: a number that is correct and read
+  as something else.
+
+  `render.type_breakdown` splits the four outcomes by requirement type, with no
+  total column and no percentage. Eight met acceptance criteria beside zero met
+  success criteria is a different situation from the reverse and both read as
+  "8 of 16"; dividing across the types would produce the feature-completion
+  figure this design exists to refuse.
+
+  Downstream qualification gained an explicit three-state table with long
+  labels (`metrics.DOWNSTREAM_LABELS`): *Not inspected*, *Inspected; no
+  qualifying evidence found*, *Verified, with evidence*. The first two were
+  being read as each other, which either overstates or understates what is
+  known. Upstream coverage, downstream qualification and delivery confidence
+  stay three separate answers.
+
+  When the criteria set changes size, the summary's trend line reports the
+  scope change and states that the outcome counts are not comparable across it,
+  rather than printing a delta. Nine criteria becoming forty-nine rendered as
+  `unverified 4→42`, which states forty-two problems, none of which anyone
+  found. Like-for-like movement over the matched set stays in the full
+  assessment, which has room to qualify it — and `metrics.like_for_like` now
+  resolves a matched pair through `(sourceKey, id)` rather than id alone, which
+  had been picking whichever `AC1` came first.
+- *2026-10-10* — **An unscoped existence claim is refused in code.** "No
+  upstream issue covers this" is a claim about every repository on GitHub, made
+  from a walk of one epic — and after the traversal change, made from a walk
+  that explicitly names what it did not cover. `assemble.unscoped_claims`
+  rejects the phrasing in a `gap`, a `coverageDetail`, a note, or either
+  rendered output. The honest form names the inspected set: "no upstream work
+  in the traversed set is linked to …".
+
+  This is mechanical and silently violated, which puts it in code by the
+  `CLAUDE.md` split. What the evidence means stays in prose.
+- *2026-10-10* — **The no-mapping procedure wrote `assembly.json` after the
+  command that reads it.** `SKILL.md`'s partial path ran `assemble` against a
+  file nobody had written, then sent the reader to step 6, which assembles
+  again. It now writes the assembly first, assembles once, and says explicitly
+  that step 6 is already done. The partial report is unchanged and still the
+  point of the path: the Jira side in full, `unknown` upstream counts, every
+  row `Unable to assess`, and the missing link named as the limitation.
+
+*2026-10-10* — **A re-rendered snapshot has to be the same document.** Checking
+the re-render requirement against a real snapshot showed it was not met: the
+heading fell back to the Jira key, criterion references lost their links, and
+the trend line reverted to "Baseline established." None of those were
+reproducible from what the snapshot stored. The snapshot now also carries
+`jiraSummary`, `jiraSite`, `summaryTrend` and `prose` (caveats, risks,
+dependencies), and `rerender` reloads the baseline named in
+`baseline.generatedAt` to rebuild the trend table. `--title` and `--site`
+became overrides rather than required input. The Jira summary now reproduces
+byte-for-byte; the full assessment can still differ by one bullet, because the
+per-field `diff` detail behind "Mapping changed" is not stored and a re-render
+cannot honestly reconstruct it.

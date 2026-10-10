@@ -1,6 +1,6 @@
 ---
 name: jira-github-rollup
-description: Use when asked to summarize, roll up, or report upstream GitHub development status for an existing Jira requirement, to check whether its acceptance criteria, success criteria, or definition of done are covered upstream, or to show what has moved since the last such report (e.g. "roll up RHOAIENG-1234", "what's the upstream status of this epic", "draft a status update for this Jira", "are the acceptance criteria on RHOAIENG-1234 covered", "which requirements have no upstream evidence", "what changed since the last rollup", "show the trend on RHOAIENG-1234"). Reads the GitHub epic links already present on the Jira issue, follows child issues and their pull requests across repositories, maps each stated requirement to the upstream evidence for it, and produces two outputs from one assessment: a detailed evidence review, and a concise Jira summary draft posted only after explicit approval. Saves a dated snapshot per run and reports unweighted movement against the previous one. Drafts a partial rollup when no upstream link exists. Read-only against GitHub; never creates mirrored Jira issues.
+description: Use when asked to summarize, roll up, or report upstream GitHub development status for an existing Jira requirement, to check whether its acceptance criteria, success criteria, or definition of done are covered upstream, or to show what has moved since the last such report (e.g. "roll up RHOAIENG-1234", "what's the upstream status of this epic", "draft a status update for this Jira", "are the acceptance criteria on RHOAIENG-1234 covered", "which requirements have no upstream evidence", "what changed since the last rollup", "show the trend on RHOAIENG-1234", "generate an HTML report for RHOAIENG-1234"). Reads the GitHub epic links already present on the Jira issue, follows child issues and their pull requests across repositories, maps each stated requirement to the upstream evidence for it, and renders one assessment three ways: a detailed evidence review, a concise Jira summary draft posted only after explicit approval, and on request a standalone interactive HTML report. Saves a dated snapshot per run and reports unweighted movement against the previous one. Drafts a partial rollup when no upstream link exists. Read-only against GitHub; never creates mirrored Jira issues.
 ---
 
 # Jira ← GitHub Development Rollup
@@ -14,10 +14,11 @@ of evidence establishes about it. Keep that line — a script that guessed at
 coverage, or an assessment made from a summary nobody read, are the two ways
 this skill produces a confidently wrong report.
 
-One run produces **two outputs from one assessment**: a full assessment for
-review, and a short Jira summary draft that is the only thing ever posted. They
-are rendered from the same tally and the assembler refuses to emit them if their
-counts disagree, so never hand-edit one to match the other.
+One run produces **one assessment, rendered more than once**: a full assessment
+for review, a short Jira summary draft that is the only thing ever posted, and —
+on request — a standalone interactive HTML file of the same full assessment. All
+three come from the same tally and the assembler refuses to emit them if their
+counts disagree, so never hand-edit one to match another.
 
 ## Invariants
 
@@ -104,13 +105,22 @@ searchJiraIssuesUsingJql: key = <KEY> AND comment ~ "github.com"
 Only on a hit, re-fetch the issue with comments and re-run `refs`. Ask whatever
 question `refs.json` returns rather than resolving it yourself.
 
-Still no mapping: run the partial sequence below and go to step 6. Do not search
-GitHub for a plausible epic.
+Still no mapping: extract the requirements (step 4), then run the partial
+sequence below. It ends at the same place step 6 does, so **do not assemble
+again** — go to step 7. Do not search GitHub for a plausible epic.
 
 ```bash
 python3 rollup.py collect --key <KEY> --epics '[]' --out manifest.json
 python3 rollup.py diff --manifest manifest.json \
   --requirements requirements.json --out diff.json
+```
+
+Now write `assembly.json` exactly as step 6 describes, with `mappings: []` and a
+`summary` that says no upstream source was inspected. It has to exist before the
+next command: `--in` reads it, and `--manifest`/`--diff` only override two of its
+keys.
+
+```bash
 python3 rollup.py assemble --in assembly.json --manifest manifest.json \
   --diff diff.json --requirements requirements.json --assessments '[]' \
   --report full-assessment.md --summary jira-summary.md --out result.json
@@ -119,8 +129,8 @@ python3 rollup.py assemble --in assembly.json --manifest manifest.json \
 The empty epic list sets `observed: false`, so every row is auto-filled `Unable
 to assess` with the gap naming the link that is needed, child counts render
 `unknown` rather than `0`, and `--assessments '[]'` is correct — there is
-nothing to assess, and nothing is being skipped. The Jira side is still
-reported in full. Say in `summary` that no upstream source was inspected.
+nothing to assess, and nothing is being skipped. The Jira side is still reported
+in full, and the report carries the missing link as the limitation it is.
 
 ### 3. Collect the evidence
 
@@ -132,6 +142,13 @@ This walks the epics, their children (sub-issues, task lists, timeline
 cross-references, across repositories), and each child's PRs, caching every raw
 response and returning a compact manifest: refs, originating epics, states,
 `stateReason`, timestamps, content hashes, access failures, and cache paths.
+
+A child that is itself an epic is traversed **one further level, and only when
+a declared relation found it** — a sub-issue or a task-list entry. A timeline
+cross-reference establishes that something mentioned the epic, which is not
+membership, and descending through one would attach an unrelated tree to this
+issue's criteria. Everything left alone lands in `manifest.untraversed`, which
+both outputs report by name; it is the scope of every absence claim in the run.
 
 Then fetch verification evidence **only** for the PRs you consider candidates
 for some requirement:
@@ -207,40 +224,89 @@ Both ends of that are guarded, because both are how a count becomes a lie:
 Write `assembly.json` with `jira` (include `site` so criteria can be linked back,
 and `fixVersions` if the issue has one), `mappings`, `summary` (two to five
 sentences you write for the full assessment), and optionally `caveats`, `risks`,
-`trendNotes`, `dependencies`. Then:
+`trendNotes`, `dependencies`.
+
+Then write `narrative.json`: the Jira summary's bullets, in your words. This is
+the part a manager reads, and a list of criterion ids is not a status update —
+say what the system now does, what it does not, and what nobody has decided.
+
+```json
+[{"bullet": "evidence-established",
+  "text": "Tier-based pool selection routes paid-tier requests and merged on 2026-09-18",
+  "refs": [{"sourceKey": "RHOAIENG-1234", "id": "AC1"}],
+  "links": ["example-org/example-gateway#520"]}]
+```
+
+`bullet` is one of `evidence-established`, `remaining-work`,
+`decisions-needed`, `next-actions`; several claims may share one. **Every claim
+names the assessment rows it rests on**, and every link it cites has to be
+evidence on one of those rows — `assemble` refuses the run otherwise. That
+check is traceability, not truth: whether the evidence establishes what your
+sentence says is still your judgement. A bullet you leave empty falls back to a
+mechanical sentence from the counts, which is a floor, not the goal.
 
 ```bash
 python3 rollup.py assemble --in assembly.json --manifest manifest.json \
   --diff diff.json --requirements requirements.json \
-  --assessments assessments.json \
-  --report full-assessment.md --summary jira-summary.md --out result.json
+  --assessments assessments.json --narrative narrative.json \
+  --report full-assessment.md --summary jira-summary.md \
+  --html full-assessment.html --out result.json
 ```
 
-One merge, one tally, two renderings:
+One merge, one tally, three renderings:
 
 | Output | Audience | Contains |
 | --- | --- | --- |
-| `full-assessment.md` | Review, in this conversation | Criterion-by-criterion evidence, downstream qualification, dependencies and tracking gaps, collection scope and limitations, trend |
-| `jira-summary.md` | The Jira comment, after approval | 150–250 words: the outcome table, four bullets, trend, one scope caveat. No criterion-by-criterion analysis, no collection diagnostics |
+| `full-assessment.md` | Review, in this conversation | Criterion-by-criterion evidence, outcomes split by type, downstream qualification, dependencies and tracking gaps, collection scope and limitations, trend |
+| `jira-summary.md` | The Jira comment, after approval | 150–250 words: the outcome table, the type mix, four bullets of narrative, trend, one scope caveat. No criterion-by-criterion analysis, no collection diagnostics |
+| `full-assessment.html` | Reading and forwarding outside this conversation | The same full assessment, searchable and filterable, with each criterion's evidence behind a disclosure. Written only when `--html` names a path |
 
-`result.json` reports `outcomes`, `deliveryConfidence`, `summaryWords` and
-`snapshotPath`. `--full-assessment-url` adds a "Full assessment" link to the
-summary, and is only honoured for a durable URL a Jira reader can open; a local
-path is dropped rather than published. `references/rollup-format.md` documents
-both contracts.
+The renderer keeps the summary readable at 49 criteria as well as 9: a criterion
+is named explicitly in **one** bullet and counted thereafter, at most three
+explicit references appear per bullet with the rest collapsed to counts by
+owning issue, and every reference is qualified — `RHOAIENG-1234 AC1`, never a
+bare `AC1`, which six issues in one rollup can each have. Complete lists live in
+the full assessment.
+
+`result.json` reports `outcomes`, `deliveryConfidence`, `summaryWords`,
+`summaryWordBudget`, `narrativeClaims`, `snapshotPath`, and `htmlBytes` with
+`htmlPath` when `--html` was given. The word budget is reported, not enforced —
+the renderer names fewer criteria to fit, and never truncates a claim.
+`references/rollup-format.md` documents all three contracts.
+
+**`--html` writes a file; it does not create a link.** The document is
+standalone — embedded CSS and script, no fonts, no CDN, no network at runtime —
+so it works from a local path, an attachment or a share drive. None of those is
+a URL a Jira reader can open. `--full-assessment-url` adds a "Full assessment"
+link to the summary, and only for an absolute `http(s)` URL you were actually
+given; a local path, a `file://` URL and a bare filename are all dropped rather
+than published. Never pass the `--html` path to it.
+
+Do not write HTML yourself. The renderer builds the document from the assembled
+rows, escapes every string from Jira and GitHub, and drops any ref that is not
+an `http(s)` URL — a hand-written narrative in HTML would be a fourth document
+nothing cross-checks.
 
 Material gaps belong in your `summary`, named by kind (missing mapping, missing
 tracking, unresolved requirement, unfinished implementation, downstream
 validation) so the reader knows who has to act. If everything is covered, say
 that in the same sentence structure rather than going silent on coverage.
 
-Show both. Tell the user where the snapshot went. To re-render either from a
-stored snapshot without re-collecting or re-judging anything:
+Show both. Tell the user where the snapshot went. The snapshot stores your
+narrative along with the assessments, so re-rendering reproduces the text that
+was reviewed rather than falling back to counts — re-render from a stored
+snapshot without re-collecting or re-judging anything:
 
 ```bash
 python3 rollup.py rerender --snapshot <path> --site <jira-base-url> \
-  --report full-assessment.md --summary jira-summary.md --out result.json
+  --report full-assessment.md --summary jira-summary.md \
+  --html full-assessment.html --out result.json
 ```
+
+This is also how you produce the HTML for a run that did not ask for it, or
+regenerate it after the renderer changes: no collection, no cache, no new
+judgement. A snapshot whose comment was posted re-renders as published rather
+than as a draft.
 
 ### 7. Post only after approval
 
@@ -288,6 +354,18 @@ append-only store. These are the ones still available to you:
 - **Inventing an epic link,** or stopping dead when there is none. No link means
   a partial draft and a request for the link.
 - **Reading a missing mapping as missing work,** or letting the layout imply it.
+- **Making an existence claim the traversal cannot support.** "No upstream
+  issue covers this" is about all of GitHub; you walked one epic. Scope it to
+  the traversed set — and remember an untraversed nested epic is part of what
+  you are scoping it to.
+- **Prescribing the fix for a contradicted criterion.** "Reopen the work or
+  revise the requirement" answers a question nobody asked. State the question:
+  does the criterion still describe intended behaviour.
+- **Writing a narrative claim that no assessment row carries.** Every sentence
+  in the summary names the rows it rests on. The check that they exist is not a
+  check that you read them right — that part is still yours.
+- **Filling the bullets with criterion ids.** The counts are two lines above.
+  A manager needs to know what the system does now, not which ordinals moved.
 - **Writing criteria the Jira does not contain.** A paraphrase is an invented
   criterion. Quote, or report that none were found.
 - **Totalling the requirement types.** Acceptance criteria, success criteria and
@@ -314,6 +392,9 @@ append-only store. These are the ones still available to you:
   dates, so give it accurate `at` values.
 - **Posting the full assessment.** It is for review in this conversation. The
   Jira comment is the summary.
+- **Treating the HTML file as somewhere a Jira reader can go.** It is a file on
+  one machine. Link it from the comment only when someone hands you a URL that
+  already serves it.
 - **Inferring delivery confidence from the counts.** Nine met is not "on track"
   without a release target and qualification evidence. `Not assessed` is the
   honest answer and the script will insist on it.

@@ -151,6 +151,11 @@ def cmd_assemble(args):
         assembly["requirements"] = load(args.requirements)
     if args.assessments:
         assembly["assessments"] = load(args.assessments)
+    if args.narrative:
+        narrative = load(args.narrative)
+        assembly["narrative"] = (
+            narrative.get("narrative") if isinstance(narrative, dict) else narrative
+        )
     if assembly.get("diff") and "baselineSnapshot" not in assembly:
         baseline = (assembly["diff"].get("baseline") or {}).get("path")
         if baseline:
@@ -169,9 +174,19 @@ def cmd_assemble(args):
 
 
 def _emit_outputs(result, args):
-    """Write both renderings, then the result JSON describing where they went."""
+    """Write the renderings, then the result JSON describing where they went."""
     report = result.pop("report")
     summary = result.pop("summary")
+    # Always rendered, written only when asked for. It never goes to stdout:
+    # a quarter of a megabyte of markup in the conversation is exactly the
+    # kind of raw payload the cache exists to keep out of it.
+    document = result.pop("html", None)
+    if document is not None:
+        result["htmlBytes"] = len(document.encode("utf-8"))
+        if getattr(args, "html", None):
+            with open(args.html, "w", encoding="utf-8") as handle:
+                handle.write(document)
+            result["htmlPath"] = args.html
     if args.report:
         with open(args.report, "w", encoding="utf-8") as handle:
             handle.write(report)
@@ -207,11 +222,17 @@ def cmd_rerender(args):
         "generatedAt": snapshot.get("generatedAt"),
         "jira": {
             "key": snapshot.get("jiraKey"),
-            "summary": args.title or snapshot.get("jiraKey"),
+            # The flags override; the snapshot is the default. A snapshot
+            # written before these fields existed still falls back to the key.
+            "summary": args.title or snapshot.get("jiraSummary") or snapshot.get("jiraKey"),
             "status": snapshot.get("jiraStatus"),
-            "site": args.site,
-            "fixVersions": [],
+            "site": args.site or snapshot.get("jiraSite"),
+            "fixVersions": snapshot.get("jiraFixVersions") or [],
         },
+        # Whether the comment was ever posted. A re-render of a published
+        # snapshot must not print "Draft - not published" over text that is
+        # sitting on the issue.
+        "publication": snapshot.get("publication"),
         "mappings": [
             {
                 "ref": mapping.get("epic"),
@@ -229,6 +250,7 @@ def cmd_rerender(args):
             "access": snapshot.get("access") or [],
             "traversalComplete": scope.get("traversalComplete", True),
             "traversalNotes": scope.get("traversalNotes") or [],
+            "untraversed": scope.get("untraversed") or [],
             "observed": scope.get("observed", True),
             "unobservedKind": scope.get("unobservedKind"),
             "unobservedReason": scope.get("unobservedReason"),
@@ -241,8 +263,38 @@ def cmd_rerender(args):
         # merge's "one assessment per requirement" rule satisfied without
         # inventing a verdict for a row that has one.
         "assessments": snapshot.get("requirements") or [],
-        "summary": args.narrative or "",
+        # The stored prose is the prose. Re-rendering a reviewed summary has to
+        # reproduce what was reviewed, not write a fresh one from the same
+        # rows - otherwise the text on the issue and the text this command
+        # prints can differ while both claim to come from one snapshot.
+        # `--narrative` overrides only when the caller asks for it.
+        "summary": args.narrative or snapshot.get("summaryNarrative") or "",
+        "narrative": snapshot.get("narrative") or [],
+        # Likewise the trend sentence: it was computed against a baseline that
+        # is not in this file, so it is replayed rather than recomputed.
+        "summaryTrend": snapshot.get("summaryTrend"),
+        # Caveats, risks and declared dependencies, restored as written.
+        **(snapshot.get("prose") or {}),
     }
+
+    # The full assessment's trend table needs the baseline's contents, not just
+    # its date. Reload it from the store; if it has been removed, the section
+    # says a baseline existed and could not be read rather than claiming this
+    # was the first run.
+    recorded = snapshot.get("baseline") or {}
+    if recorded.get("generatedAt"):
+        prior = snapshots_mod.find(snapshot.get("jiraKey"), recorded["generatedAt"])
+        if prior is not None:
+            assembly["baselineSnapshot"] = prior
+            assembly["diff"] = {"baseline": recorded}
+        else:
+            assembly["diff"] = {
+                "baselineProblem": {
+                    "generatedAt": recorded["generatedAt"],
+                    "detail": "no longer in the snapshot store",
+                }
+            }
+
     result = assemble_mod.build(
         assembly, write_snapshot=False, full_assessment_url=args.full_assessment_url
     )
@@ -261,11 +313,25 @@ def cmd_excerpt(args):
     if data is None:
         raise SystemExit(f"nothing cached for {args.kind} {args.ref}; run collect first")
     value = data
-    for part in args.field.split("."):
-        value = (value or {}).get(part) if isinstance(value, dict) else None
-    if value is None:
-        raise SystemExit(f"{args.ref}: no field {args.field!r} in the cached response")
-    text = value if isinstance(value, str) else util.canonical(value)
+    if args.field:
+        # An empty --field means the whole document, which is the only way to
+        # read a payload cached as a bare list: `pr-checks` is one, and walking
+        # a field path into it has no meaning.
+        for part in args.field.split("."):
+            value = (value or {}).get(part) if isinstance(value, dict) else None
+        if value is None:
+            raise SystemExit(
+                f"{args.ref}: no field {args.field!r} in the cached {args.kind} response"
+                + (
+                    "; this payload is a list, so pass --field '' to read all of it"
+                    if isinstance(data, list)
+                    else ""
+                )
+            )
+    # Indented rather than canonical: --match and --context are line-based, and
+    # a compact dump is one line, so every match would return the whole payload.
+    # canonical() is the hashing format and stays untouched.
+    text = value if isinstance(value, str) else json.dumps(value, indent=1, sort_keys=True)
 
     matched = None
     if args.match:
@@ -368,8 +434,16 @@ def build_parser():
     p.add_argument("--diff")
     p.add_argument("--requirements")
     p.add_argument("--assessments")
+    p.add_argument(
+        "--narrative",
+        help="summary bullet claims: [{bullet, text, refs:[{sourceKey,id}], links:[ref]}]",
+    )
     p.add_argument("--report", help="write the full assessment here")
     p.add_argument("--summary", help="write the Jira summary draft here")
+    p.add_argument(
+        "--html",
+        help="write the standalone HTML full assessment here (local file, not a Jira link)",
+    )
     p.add_argument(
         "--full-assessment-url",
         help="durable URL a Jira reader can open; omitted from the summary if absent",
@@ -386,6 +460,7 @@ def build_parser():
     p.add_argument("--narrative", help="the Summary paragraph for the full assessment")
     p.add_argument("--report", help="write the full assessment here")
     p.add_argument("--summary", help="write the Jira summary draft here")
+    p.add_argument("--html", help="write the standalone HTML full assessment here")
     p.add_argument("--full-assessment-url")
     p.add_argument("--out")
     p.set_defaults(func=cmd_rerender)

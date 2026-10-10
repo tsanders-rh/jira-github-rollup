@@ -400,8 +400,13 @@ def plan(baseline_info, manifest, requirements, mappings, full_refresh=False):
         # The action an auto-filled row asks for depends on why nothing was
         # observed: add a link, or get read access to the one already there.
         "autoFillGap": None if observed else scope_mod.gap(manifest.get("unobservedKind")),
+        # `sourceKey` is not decoration. A rollup over six Jira issues has five
+        # criteria called AC1, so a pair keyed on the id alone silently matches
+        # one Jira's criterion against another's.
         "matchedPairs": [
             {
+                "sourceKey": m["current"].get("sourceKey"),
+                "previousSourceKey": m["previous"].get("sourceKey"),
                 "currentId": m["current"].get("id"),
                 "previousId": m["previous"].get("id"),
                 "previousAssessment": m["previous"].get("assessment"),

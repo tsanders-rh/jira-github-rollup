@@ -140,8 +140,8 @@ body. They are fetched for their state and never traversed.
 
 Traversal stops in three places, each recorded rather than silent: PRs are
 leaves (their cross-references are not followed), dependencies are leaves, and
-a child that looks like an epic itself is marked `nested` and recorded, not
-traversed, with `nestedVia` saying how it was judged:
+a child that looks like an epic itself is marked `nested`, with `nestedVia`
+saying how it was judged:
 
 | `nestedVia` | Test |
 | --- | --- |
@@ -153,6 +153,44 @@ The fallback drops upward references because a leaf that names its parent and a
 sibling is not a parent. Each false positive subtracts from what the report
 claims to have covered, so the error reads as a gap that is not there. Judging
 on the native sub-issue list costs one `gh` request per unlabelled child.
+
+#### Nested epics
+
+A nested epic is traversed **one further level, and only when a declared
+relation found it** — `sub-issue` or `task-list`, the two in
+`collect.DECLARED_RELATIONS`. Its children are attributed to it (they carry the
+nested epic in `epics`, and `depth: 2`), and it is marked `nestedTraversed`.
+
+The rule keys on the discovery relation rather than on nesting, because the
+relations establish different things. A task-list entry is the epic author
+saying "this is part of the work". A `timeline-cross-reference` is someone
+having mentioned the epic once — descending through it would attach an
+unrelated tree of issues to this Jira issue's criteria, and every row they
+touch would be assessed against work nobody claimed was in scope.
+
+Anything not traversed goes in `manifest.untraversed`, one entry per epic:
+
+```json
+{"ref": "example-org/example-gateway#1445", "title": "…",
+ "nestedVia": "sub-issues", "discoveredVia": "timeline-cross-reference",
+ "depth": 1,
+ "reason": "reached only by timeline-cross-reference, which establishes a mention rather than membership"}
+```
+
+The other `reason` is `already 1 level below the mapped epic` — the depth
+cap, which exists so one run cannot walk an org. Both renderings read this list
+directly: the full assessment names each entry under **Not traversed**, and the
+Jira summary's scope caveat counts them. That is the whole point of it being
+structured — an untraversed branch that only showed up as free-text prose was
+a branch a reader could miss, and every "no evidence found" row in the report
+inherits the omission.
+
+Cycles terminate: a ref already visited is not queued again, so a child that
+lists its own parent walks nowhere.
+
+A `403` on the sub-issue list of a readable issue is a limitation, recorded in
+`access`, not an empty branch. The two used to be indistinguishable, which hid
+a whole subtree behind "this epic has no children".
 
 `stateReason` is recorded in four buckets and never normalized:
 
@@ -210,8 +248,9 @@ costs the report its credibility.
 ```bash
 python3 rollup.py assemble --in assembly.json --manifest manifest.json \
   --diff diff.json --requirements requirements.json \
-  --assessments assessments.json \
-  --report full-assessment.md --summary jira-summary.md --out result.json
+  --assessments assessments.json --narrative narrative.json \
+  --report full-assessment.md --summary jira-summary.md \
+  --html full-assessment.html --out result.json
 ```
 
 `assembly.json`:
@@ -224,6 +263,9 @@ python3 rollup.py assemble --in assembly.json --manifest manifest.json \
   "mappings": [{"ref": "example-org/example-gateway#412", "url": "https://github.com/…",
                 "title": "…", "linkSource": "upstream-development-section"}],
   "summary": "Two to five sentences.",
+  "narrative": [{"bullet": "evidence-established", "text": "…",
+                 "refs": [{"sourceKey": "RHOAIENG-1234", "id": "AC1"}],
+                 "links": ["example-org/example-gateway#520"]}],
   "caveats": ["example-org/example-dlp returned 404 for this account."],
   "dependencies": [{"ref": "RHOAIENG-1250", "criteria": ["SC9"], "note": "Named in the description."}],
   "risks": [],
@@ -231,6 +273,14 @@ python3 rollup.py assemble --in assembly.json --manifest manifest.json \
   "blocked": false
 }
 ```
+
+`summary` is the full assessment's Summary paragraph. `narrative` is the Jira
+summary's four bullets — one entry per claim, `bullet` naming which of
+`evidence-established`, `remaining-work`, `decisions-needed`, `next-actions` it
+belongs under. `--narrative narrative.json` supplies the same list from its own
+file, which is usually easier to iterate on. A bullet with no claim falls back
+to a mechanical sentence built from the counts; that is a floor, not the
+intent. `references/rollup-format.md` has the contract.
 
 `jira.site` is what makes a criterion clickable — criteria have no anchors in
 Jira, so they are linked as `RHOAIENG-1234 SC5` against the parent. Without it
@@ -245,14 +295,21 @@ and link the work covering SC6", not a claim about an epic nobody traversed.
 | --- | --- |
 | `--report PATH` | Writes the full assessment |
 | `--summary PATH` | Writes the Jira summary draft |
-| `--full-assessment-url URL` | Adds a "Full assessment" link to the summary. Dropped unless it is a durable URL — a local path is never published |
+| `--html PATH` | Writes the standalone HTML full assessment. A local file, never a Jira link |
+| `--narrative PATH` | The Jira summary's bullet claims, as above |
+| `--full-assessment-url URL` | Adds a "Full assessment" link to the summary. Dropped unless it is an absolute `http(s)` URL — a local path, a `file://` URL and a bare filename are all refused. **Not** where the `--html` path goes |
 | `--no-snapshot` | Renders without writing one. For iterating on wording, not for a real run |
 | `--snapshot-dir` | Overrides the location |
 
 `result.json` carries `outcomes` (the four counts), `deliveryConfidence`,
-`summaryWords`, `snapshotPath`, the three ratios, and `reused`/`assessed`.
+`summaryWords`, `summaryWordBudget`, `narrativeClaims`, `snapshotPath`, the
+three ratios, `reused`/`assessed`, and `htmlBytes` — with `htmlPath` when
+`--html` named one. The HTML is rendered on every run so the cross-check always
+covers it, and is written only when asked for. It is never printed: a quarter
+of a megabyte of markup on stdout is exactly the kind of raw payload the cache
+exists to keep out of the conversation.
 
-Four ways this command refuses rather than emitting something wrong:
+Six ways this command refuses rather than emitting something wrong:
 
 - A requirement with no fresh and no reusable assessment. It will not invent one.
 - An `Evidence found` carrying a non-empty `unresolvedClauses` or
@@ -260,8 +317,21 @@ Four ways this command refuses rather than emitting something wrong:
   holds; an open clause makes it `Partial evidence`.
 - A `confirmed-unmet` declared without `refutingEvidence`, or declared on an
   assessment other than `No evidence found`. Absence of evidence is `unverified`.
-- A disagreement between the two outputs — the outcome row missing from either,
-  counts that do not sum to the criteria total, or a local path in the summary.
+- A disagreement between the renderings — the outcome row missing from one,
+  counts that do not sum to the criteria total, by-type rows in the HTML that
+  do not add up to the tally, a count stated in the summary's prose that the
+  tally contradicts, or a local path in the summary or the HTML.
+- An untraceable narrative claim: one citing a requirement not in this run,
+  citing no row at all, linking an artifact that is not evidence on any row it
+  cites, or filed under `evidence-established` while resting on an `unverified`
+  row.
+- An unscoped existence claim in either output — "no upstream issue exists",
+  "not implemented anywhere". The walk covered the mapped epics and what they
+  declare; it did not cover GitHub. Scope the sentence to the sources inspected.
+
+The last two are structural. They establish that a claim is attached to rows
+and sources that exist; they do not establish that it is correct. A sentence
+that misreads what a merged PR does passes both.
 
 The status line is derived, not supplied. `Complete` requires every requirement
 at `Evidence found`, no downstream step outstanding, and every child closed.
@@ -285,20 +355,48 @@ The wording for each kind — status, `unobservedReason`, the Gap column, and th
 ### `rerender`
 
 ```bash
-python3 rollup.py rerender --snapshot <path> --site https://your-site.atlassian.net \
-  --title "RHOAIENG-1234 Tiered quota" \
-  --report full-assessment.md --summary jira-summary.md --out result.json
+python3 rollup.py rerender --snapshot <path> \
+  --report full-assessment.md --summary jira-summary.md \
+  --html full-assessment.html --out result.json
 ```
 
-Rebuilds both outputs from a stored snapshot. No collection, no reassessment, no
+`--site` and `--title` are overrides, not required input: the snapshot carries
+`jiraSite` and `jiraSummary`.
+
+Rebuilds every output from a stored snapshot. No collection, no reassessment, no
 new snapshot — the stored assessments are passed straight back in, so the
-judgements are exactly the ones that were made at the time.
+judgements are exactly the ones that were made at the time. `--html` is the
+supported way to produce the HTML report for a run that did not ask for one,
+and it needs no network and no cache: the test suite proves it by deleting the
+cache and pointing `GH_BIN` at a binary that always fails.
 
 Use it to regenerate a report after a rendering change, or to see what a past
 run would look like under the current renderer. It cannot change an outcome: a
 snapshot written before a rule existed is re-rendered under the old judgements,
-which is the point. `--narrative` supplies the Summary paragraph, which the
-snapshot does not store.
+which is the point.
+
+The prose comes back with it. A snapshot stores `summaryNarrative` (the full
+assessment's Summary paragraph) and `narrative` (the Jira summary's bullet
+claims), so re-rendering reproduces the summary a reviewer approved rather than
+falling back to mechanical counts. `--narrative` overrides the stored Summary
+paragraph; there is no flag that re-judges anything.
+
+Everything else the outputs are rendered with comes back too: `summaryTrend`
+(the trend sentence, which was computed against a baseline the snapshot does
+not contain), `prose` (caveats, risks, dependencies), the Jira title, site and
+`fixVersions`, and `publication`. The last two matter to the HTML: without the
+fix versions stored, a re-render would turn a recorded release target into "Not
+recorded on the Jira issue"; without `publication`, it would stamp "Draft — not
+published" over text already sitting on the issue. The full assessment's trend
+*table* is rebuilt by reloading the baseline snapshot named in
+`baseline.generatedAt`; if that file is gone the section says a baseline existed
+and could not be read, rather than claiming a first run.
+
+Two things do not survive a re-render, because the snapshot does not record
+them: the per-field `diff` detail behind bullets like "Mapping changed", and
+anything derived from the live inventory. The summary and the HTML reproduce
+exactly; the Markdown full assessment can differ by a line in the trend
+section.
 
 ### `excerpt`
 
@@ -308,9 +406,16 @@ python3 rollup.py excerpt --key <KEY> --ref example-org/example-gateway#520 --ki
   --field '' --match 'fail' --context 1 --max-chars 2000
 ```
 
-`--kind` is `issue`, `pr`, `pr-files` or `pr-checks`. Truncation is always
-reported in `truncated`, with `fullChars` and the `path` to the whole file, so
-a short read can be widened rather than mistaken for the whole artifact.
+`--kind` is `issue`, `pr`, `pr-files` or `pr-checks`. `--field` walks a dotted
+path into the payload; `pr-checks` is cached as a bare list, so it takes
+`--field ''` — the whole document — and a field path into it fails rather than
+returning nothing. Truncation is always reported in `truncated`, with
+`fullChars` and the `path` to the whole file, so a short read can be widened
+rather than mistaken for the whole artifact.
+
+Prefer `--match` to reading a payload whole. A field that is not already text
+is rendered one key per line, so `--match 'fail' --context 1` returns the few
+checks that failed instead of all of them.
 
 ### `convert`, `promote`, `measure`
 
@@ -380,6 +485,13 @@ rules changed, when a previous run was wrong, or when the user asks for one.
 | `assemble` errors `confirmed-unmet declared with nothing cited` | Absence was reported as refutation | Drop the `outcome` field. Absence of evidence is `unverified`, and the count is the same either way |
 | `assemble` errors `the Jira summary does not carry the outcome row` | The two renderings disagree | A renderer bug, not a data problem. Do not hand-edit either output to agree |
 | `assemble` errors `contains paths a reader cannot follow` | A local path reached the summary | Usually a `--full-assessment-url` pointing at `/tmp` or `~`. Omit it unless the URL is durable |
+| `assemble` errors `which is not an assessed requirement in this run` | A narrative claim cites a row that does not exist | Check the `sourceKey`, not just the id. `AC1` exists on six issues |
+| `assemble` errors `cites no assessment row` | A claim with no `refs` | Attach it to what it rests on, or drop the sentence |
+| `assemble` errors `is not evidence on any row it cites` | A link the cited rows do not carry | Cite the row that carries it, or link what the rows actually hold |
+| `assemble` errors `rests on …, which nothing inspected supports` | An `evidence-established` claim over an `unverified` row | Either the claim belongs under another bullet, or the row was assessed too conservatively. Fix whichever is wrong |
+| `assemble` errors `claims more than a traversal can show` | An unscoped existence claim, in prose or in a `gap` | Scope it: "no upstream work in the traversed set is linked to …" |
+| `assemble` errors `says N met but the tally … says M` | The prose and the table disagree | The tally is right by construction. Fix the sentence |
+| `result.summaryWordBudget.within` is false | The draft is outside 150–250 words | Reported, not enforced. Tighten the narrative rather than letting the renderer cut a claim in half |
 | `promote` errors `a Jira comment id is required` | Promoting without a successful post | Correct. Leave the snapshot a draft until the comment lands and returns an id |
 | A snapshot "could not be read" in the trend section | Corrupt or unknown schema | Reported in the section, with the date. The run continues and establishes a new baseline |
 | Snapshot write fails | Disk or permissions | Say so and continue. The rollup is the deliverable; the snapshot is bookkeeping |

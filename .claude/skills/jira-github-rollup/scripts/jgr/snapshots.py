@@ -63,6 +63,22 @@ def load(path):
     return data, None
 
 
+def find(jira_key, generated_at, directory=None):
+    """The snapshot written at `generated_at`, or None.
+
+    `rerender` needs this: a snapshot records which baseline it was compared
+    against but not the baseline's contents, and the trend table cannot be
+    rebuilt from a date alone.
+    """
+    if not generated_at:
+        return None
+    for candidate in list_snapshots(jira_key, directory):
+        data, _ = load(candidate["path"])
+        if data is not None and data.get("generatedAt") == generated_at:
+            return data
+    return None
+
+
 def select_baseline(jira_key, directory=None):
     """Pick the snapshot this run compares against.
 
@@ -156,7 +172,19 @@ def promote(path, comment_id, published_at=None, published_text=None):
     return path
 
 
-def build(jira, mappings, manifest, requirements, baseline_info, generated_at=None, outcomes=None):
+def build(
+    jira,
+    mappings,
+    manifest,
+    requirements,
+    baseline_info,
+    generated_at=None,
+    outcomes=None,
+    narrative=None,
+    summaryNarrative=None,
+    trend=None,
+    prose=None,
+):
     """Assemble the snapshot document for this run.
 
     Schema v2 is v1 plus additive fields. Every v1 key is still written with
@@ -204,6 +232,18 @@ def build(jira, mappings, manifest, requirements, baseline_info, generated_at=No
         "baseline": baseline,
         "jiraStatus": jira.get("status"),
         "rollupStatus": jira.get("rollupStatus"),
+        # The two pieces of Jira context both outputs are rendered with: the
+        # issue title in the heading, and the site that turns `AC1
+        # (RHOAIENG-1234)` into a link. Neither is derivable from `jiraKey`,
+        # and without them a re-render produces a visibly different document
+        # from the one that was reviewed.
+        "jiraSummary": jira.get("summary"),
+        "jiraSite": jira.get("site"),
+        # The release target, for the same reason. The HTML report states it
+        # when recorded and says so when not; without it stored, re-rendering
+        # would turn a recorded fix version into "not recorded on the Jira
+        # issue", which is a different and false statement.
+        "jiraFixVersions": jira.get("fixVersions") or [],
         "mappings": [
             {
                 "epic": mapping["ref"],
@@ -231,6 +271,10 @@ def build(jira, mappings, manifest, requirements, baseline_info, generated_at=No
             ],
             "traversalComplete": bool(manifest.get("traversalComplete")),
             "traversalNotes": manifest.get("traversalNotes") or None,
+            # The branches the walk stopped at. Without this a later reader
+            # cannot tell a rollup that covered everything from one that
+            # covered most of it, and the two have identical outcome tables.
+            "untraversed": manifest.get("untraversed") or None,
             "observed": manifest.get("observed", bool(manifest.get("epics"))),
             "unobservedKind": manifest.get("unobservedKind"),
             "unobservedReason": manifest.get("unobservedReason"),
@@ -240,6 +284,21 @@ def build(jira, mappings, manifest, requirements, baseline_info, generated_at=No
         # reader can see what was reported without re-deriving it, and so a
         # change in the mapping rules is visible against `rulesVersion`.
         "outcomes": outcomes,
+        # The prose that went out, with the assessment rows each claim rests
+        # on. Stored for two reasons: re-rendering has to reproduce the summary
+        # that was reviewed rather than regenerate a new one, and a later
+        # reader needs to be able to get from a sentence back to the rows it
+        # was drawn from. It records what was claimed, not that the claim held.
+        "narrative": narrative or None,
+        "summaryNarrative": summaryNarrative or None,
+        # The rendered trend sentence. It is computed against a baseline this
+        # document does not contain, so it cannot be recomputed later.
+        "summaryTrend": trend or None,
+        # The remaining model prose in the full assessment: caveats, risks and
+        # declared dependencies. Dropping these on a re-render would quietly
+        # remove the limitation reporting, which is the part of the document
+        # that must not go missing.
+        "prose": prose or None,
         "requirements": requirements,
         "inventory": {
             "collectedAt": manifest.get("collectedAt"),

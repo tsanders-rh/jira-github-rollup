@@ -69,12 +69,27 @@ def _epic_label(labels):
     return bool(names & {"epic", "feature", "initiative"})
 
 
+# Relations strong enough to traverse a nested epic through.
+#
+# `sub-issue` is GitHub's own parent-child link and `task-list` is the epic
+# author writing the child down; both are someone declaring membership. A
+# `timeline-cross-reference` is only that something, somewhere, mentioned the
+# epic - a duplicate, a "see also", a bot. Descending through a mention would
+# pull unrelated trees into the scope and report their criteria as this issue's
+# work, so a nested epic found that way is recorded and left alone.
+DECLARED_RELATIONS = ("sub-issue", "task-list")
+
+
 class Collector:
-    def __init__(self, jira_key, gh=None, cache=None, max_children=200):
+    def __init__(self, jira_key, gh=None, cache=None, max_children=200, max_depth=1):
         self.jira_key = jira_key
         self.gh = gh or Gh()
         self.cache = cache or Cache(jira_key)
         self.max_children = max_children
+        # One level, matching the documented boundary. Depth is still tracked
+        # rather than assumed, so raising it is a parameter change and not a
+        # rewrite - and so the stop is reported with the depth that caused it.
+        self.max_depth = max_depth
         self.access = {}
         self.notes = []
         self.complete = True
@@ -128,6 +143,12 @@ class Collector:
         """
         result = self.gh.sub_issues(repo, number)
         if not result.ok:
+            # A 403 is not "this repo has no sub-issues feature". It is a
+            # branch of the tree that exists and was refused, and swallowing
+            # it turned real children into an absence of children - every
+            # criterion they own then reads as untracked work.
+            if result.status == "forbidden":
+                self._fail(f"{repo}#{number}", result, "sub-issue list")
             return [], False
         refs = []
         for item in result.data or []:
@@ -225,6 +246,88 @@ class Collector:
         }
         return "body-references" if len(body_refs) >= 2 else None
 
+    def _declared_children(self, parent_ref, data):
+        """A nested epic's own children, by declared relation only.
+
+        No timeline pass here, unlike the top-level epics. At depth zero a
+        cross-reference is a cheap hint worth following up; at depth one it is
+        a mention of a mention, and following it would attach whatever happens
+        to link to a nested epic to this Jira issue's criteria.
+        """
+        repo, _, number = parent_ref.partition("#")
+        discovered = {}
+        for ref in self._sub_issues(repo, number):
+            discovered.setdefault(ref, "sub-issue")
+        for ref in self._children_from_body(repo, data.get("body")):
+            discovered.setdefault(ref, "task-list")
+        discovered.pop(parent_ref, None)
+        for dep_ref in self._dependencies_from_body(data.get("body")):
+            discovered.pop(dep_ref, None)
+        return discovered
+
+    def _descend(self, entry, record, data, children, queue, visited, untraversed, epic_refs):
+        """Traverse a nested epic one level, or record why it was left alone."""
+        child_ref = entry["ref"]
+        via = record["discoveredVia"]
+        if via not in DECLARED_RELATIONS or record["depth"] >= self.max_depth:
+            entry["nestedTraversed"] = False
+            reason = (
+                f"reached only by {via}, which establishes a mention rather than membership"
+                if via not in DECLARED_RELATIONS
+                else f"already {util.pluralize(record['depth'], 'level')} below the mapped epic"
+            )
+            untraversed.append(
+                {
+                    "ref": child_ref,
+                    "title": entry.get("title"),
+                    "discoveredVia": via,
+                    "nestedVia": entry["nestedVia"],
+                    "depth": record["depth"],
+                    "reason": reason,
+                }
+            )
+            self.notes.append(
+                f"{child_ref} looks like a nested epic ({entry['nestedVia']}) and was recorded "
+                f"but not traversed: {reason}. Criteria owned by work beneath it are not in "
+                "this rollup."
+            )
+            return
+
+        added = 0
+        for ref, via_child in sorted(self._declared_children(child_ref, data).items()):
+            if ref in visited:
+                continue
+            if len(children) >= self.max_children and ref not in children:
+                self.complete = False
+                self.notes.append(
+                    f"Child traversal stopped at {self.max_children} issues while descending "
+                    f"into {child_ref}."
+                )
+                break
+            existing = children.setdefault(
+                ref,
+                {
+                    "ref": ref,
+                    "epics": [],
+                    "discoveredVia": via_child,
+                    "depth": record["depth"] + 1,
+                },
+            )
+            # Attributed to the nested epic that owns it, not to the top-level
+            # epic, so a reader can see which branch a criterion came from.
+            if child_ref not in existing["epics"]:
+                existing["epics"].append(child_ref)
+            if ref not in queue:
+                queue.append(ref)
+            added += 1
+
+        entry["nestedTraversed"] = True
+        self.notes.append(
+            f"{child_ref} is a nested epic ({entry['nestedVia']}) reached by a declared "
+            f"{via} relation; it was traversed one level, adding "
+            f"{util.pluralize(added, 'child', 'children')}."
+        )
+
     # --- stages ---------------------------------------------------------
 
     def inventory(self, epics):
@@ -282,20 +385,34 @@ class Collector:
                     )
                     break
                 record = children.setdefault(
-                    child_ref, {"ref": child_ref, "epics": [], "discoveredVia": via}
+                    child_ref, {"ref": child_ref, "epics": [], "discoveredVia": via, "depth": 0}
                 )
                 if ref not in record["epics"]:
                     record["epics"].append(ref)
 
         epic_refs = {entry["ref"] for entry in epic_entries}
 
+        # A worklist rather than a loop over a fixed dict: traversing a nested
+        # epic adds children while the walk is running. `visited` holds every
+        # ref already handled, including the top epics, so a child that points
+        # back at its parent - or at a sibling that points back at it - is
+        # recorded once and never re-entered.
         child_entries = []
-        for child_ref, record in sorted(children.items()):
+        untraversed = []
+        visited = set(epic_refs)
+        queue = sorted(children)
+        while queue:
+            child_ref = queue.pop(0)
+            if child_ref in visited:
+                continue
+            visited.add(child_ref)
+            record = children[child_ref]
             data = self._issue(child_ref, "child issue")
             entry = {
                 "ref": child_ref,
                 "epics": record["epics"],
                 "discoveredVia": record["discoveredVia"],
+                "depth": record["depth"],
                 "accessible": data is not None,
                 "title": None,
                 "state": None,
@@ -306,6 +423,7 @@ class Collector:
                 "crossRepo": child_ref.split("#")[0] not in {e.split("#")[0] for e in record["epics"]},
                 "nested": False,
                 "nestedVia": None,
+                "nestedTraversed": None,
                 "bodyPath": None,
                 "bodyHash": None,
                 "prs": [],
@@ -335,8 +453,8 @@ class Collector:
             if nested_via:
                 entry["nested"] = True
                 entry["nestedVia"] = nested_via
-                self.notes.append(
-                    f"{child_ref} looks like a nested epic; it was recorded but not traversed."
+                self._descend(
+                    entry, record, data, children, queue, visited, untraversed, epic_refs
                 )
             for dep_ref in self._dependencies_from_body(body):
                 dependencies.setdefault(dep_ref, {"ref": dep_ref, "referencedBy": []})
@@ -385,7 +503,14 @@ class Collector:
                 }
             )
 
-        return self._manifest(epic_entries, child_entries, dependency_entries, stage="inventory")
+        child_entries.sort(key=lambda entry: entry["ref"])
+        return self._manifest(
+            epic_entries,
+            child_entries,
+            dependency_entries,
+            stage="inventory",
+            untraversed=untraversed,
+        )
 
     def _child_hash(self, entry):
         """Everything about a child that can change an assessment.
@@ -530,7 +655,7 @@ class Collector:
             return scope.NOT_FOUND
         return scope.UNREADABLE
 
-    def _manifest(self, epics, children, dependencies, stage):
+    def _manifest(self, epics, children, dependencies, stage, untraversed=None):
         observed = any(epic["accessible"] for epic in epics)
         kind = None if observed else self._unobserved_kind(epics)
         manifest = {
@@ -544,6 +669,12 @@ class Collector:
             "access": self._access_list(),
             "traversalComplete": self.complete,
             "traversalNotes": self.notes,
+            # Nested epics the walk stopped at, with the relation that
+            # found them. Structured rather than left in the notes prose
+            # because both renderings have to say it in their own words,
+            # and a gap in the scope is not something to read out of a
+            # free-text line.
+            "untraversed": untraversed or [],
             # True whenever at least one epic was read. An epic that 404s
             # leaves nothing observed, and the child count must then be
             # `unknown` rather than a zero nobody counted.

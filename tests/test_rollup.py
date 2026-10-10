@@ -15,11 +15,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from html import parser as html_parser
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPTS = os.path.join(ROOT, ".claude", "skills", "jira-github-rollup", "scripts")
@@ -30,6 +32,7 @@ from jgr import cache as cache_mod  # noqa: E402
 from jgr import collect as collect_mod  # noqa: E402
 from jgr import convert as convert_mod  # noqa: E402
 from jgr import diff as diff_mod  # noqa: E402
+from jgr import htmlreport as htmlreport_mod  # noqa: E402
 from jgr import measure as measure_mod  # noqa: E402
 from jgr import links as links_mod  # noqa: E402
 from jgr import metrics as metrics_mod  # noqa: E402
@@ -540,34 +543,119 @@ class PipelineTest(unittest.TestCase):
         self.assertIsNone(child["nestedVia"])
         self.assertEqual([n for n in manifest["traversalNotes"] if "nested epic" in n], [])
 
-    def test_a_child_with_its_own_sub_issues_is_a_nested_epic(self):
+    def _grandchildren(self):
+        """CHILD_B becomes a nested epic with two children of its own."""
+        for ref, title in (
+            ("example-org/example-quota#901", "Quota metrics exporter"),
+            ("example-org/example-quota#902", "Quota metrics dashboard"),
+        ):
+            self.world["issues"][ref] = issue(ref, title)
+            self.world["timeline"][ref] = []
         self.world["subIssues"][CHILD_B] = [
             "example-org/example-quota#901",
             "example-org/example-quota#902",
         ]
+
+    def test_a_nested_epic_reached_by_a_declared_relation_is_traversed_one_level(self):
+        """CHILD_B is one of the epic's own sub-issues, so its children are in scope."""
+        self._grandchildren()
         manifest = self.collect()
         child = self.nested(manifest, CHILD_B)
         self.assertTrue(child["nested"])
         self.assertEqual(child["nestedVia"], "sub-issues")
-        self.assertIn(
-            f"{CHILD_B} looks like a nested epic; it was recorded but not traversed.",
-            manifest["traversalNotes"],
-        )
-        # Recorded, not traversed: its own sub-issues stay out of the manifest.
+        self.assertTrue(child["nestedTraversed"])
+
+        refs = [c["ref"] for c in manifest["children"]]
+        self.assertIn("example-org/example-quota#901", refs)
+        self.assertIn("example-org/example-quota#902", refs)
+        self.assertEqual(manifest["untraversed"], [])
+
+        grandchild = self.nested(manifest, "example-org/example-quota#901")
+        self.assertEqual(grandchild["depth"], 1)
+        # Attributed to the nested epic that owns it, not to the top epic.
+        self.assertEqual(grandchild["epics"], [CHILD_B])
+
+    def test_a_nested_epic_found_only_by_a_mention_is_recorded_not_traversed(self):
+        """A timeline cross-reference establishes a mention, not membership.
+
+        This is the case that made the whole distinction necessary: descending
+        through a mention attaches whatever happened to link to the epic - a
+        duplicate, a bot, a "see also" - to this Jira issue's criteria.
+        """
+        self._grandchildren()
+        mentioned = "example-org/example-quota#420"
+        self.world["issues"][mentioned] = issue(mentioned, "Adjacent metering epic")
+        self.world["timeline"][mentioned] = []
+        self.world["subIssues"][mentioned] = [
+            "example-org/example-quota#950",
+            "example-org/example-quota#951",
+        ]
+        self.world["timeline"][EPIC] = [crossref(mentioned, kind="issue")]
+        manifest = self.collect()
+
+        child = self.nested(manifest, mentioned)
+        self.assertEqual(child["discoveredVia"], "timeline-cross-reference")
+        self.assertTrue(child["nested"])
+        self.assertFalse(child["nestedTraversed"])
         self.assertNotIn(
-            "example-org/example-quota#901", [c["ref"] for c in manifest["children"]]
+            "example-org/example-quota#950", [c["ref"] for c in manifest["children"]]
         )
 
-    def test_the_scope_caveat_agrees_with_itself_on_one_nested_epic(self):
-        self.world["subIssues"][CHILD_B] = [
-            "example-org/example-quota#901",
-            "example-org/example-quota#902",
+        recorded = manifest["untraversed"]
+        self.assertEqual([entry["ref"] for entry in recorded], [mentioned])
+        self.assertIn("mention rather than membership", recorded[0]["reason"])
+        # The declared one next to it is still traversed: the rule is about the
+        # relation, not about nesting.
+        self.assertTrue(self.nested(manifest, CHILD_B)["nestedTraversed"])
+
+    def test_traversal_stops_at_one_level_and_says_so(self):
+        self._grandchildren()
+        deep = "example-org/example-quota#901"
+        self.world["subIssues"][deep] = [
+            "example-org/example-quota#960",
+            "example-org/example-quota#961",
         ]
         manifest = self.collect()
+
+        self.assertNotIn(
+            "example-org/example-quota#960", [c["ref"] for c in manifest["children"]]
+        )
+        recorded = manifest["untraversed"]
+        self.assertEqual([entry["ref"] for entry in recorded], [deep])
+        self.assertIn("1 level below", recorded[0]["reason"])
+
+    def test_a_cycle_between_a_child_and_its_parent_terminates(self):
+        """CHILD_B lists the epic and CHILD_A as sub-issues; both are already seen."""
+        self.world["subIssues"][CHILD_B] = [EPIC, CHILD_A]
+        manifest = self.collect()
+        refs = [c["ref"] for c in manifest["children"]]
+        self.assertEqual(len(refs), len(set(refs)))
+        self.assertNotIn(EPIC, refs)
+
+    def test_a_forbidden_sub_issue_list_is_a_limitation_not_an_empty_branch(self):
+        """403 used to read as "no children", turning tracked work into a gap."""
+        self.world["forbiddenSubIssues"] = [CHILD_B]
+        manifest = self.collect()
+        refused = [a for a in manifest["access"] if a["status"] == "forbidden"]
+        self.assertTrue(refused, "a refused sub-issue list has to reach the access list")
+        self.assertFalse(manifest["traversalComplete"])
+
+    def test_the_scope_caveat_agrees_with_itself_on_one_nested_epic(self):
+        self._grandchildren()
+        mentioned = "example-org/example-quota#420"
+        self.world["issues"][mentioned] = issue(mentioned, "Adjacent metering epic")
+        self.world["timeline"][mentioned] = []
+        self.world["subIssues"][mentioned] = [
+            "example-org/example-quota#950",
+            "example-org/example-quota#951",
+        ]
+        self.world["timeline"][EPIC] = [crossref(mentioned, kind="issue")]
+        manifest = self.collect()
         caveat = summary_mod._scope_caveat(manifest)
-        self.assertIn("1 nested epic was recorded", caveat)
-        # Both stages ran on one collector; the note must appear once.
-        self.assertEqual(len(manifest["traversalNotes"]), 1)
+        self.assertIn("1 nested epic was recorded but not traversed", caveat)
+        # The traversed one must not be counted as a gap, however it is phrased
+        # in the notes.
+        self.assertNotIn("2 nested epics", caveat)
 
     def test_one_sub_issue_is_a_child_not_a_nested_epic(self):
         self.world["subIssues"][CHILD_B] = ["example-org/example-quota#901"]
@@ -918,6 +1006,14 @@ class TwoOutputTest(PipelineTest):
         )
         return result, report, result["summary"]
 
+    def bullet(self, summary, label):
+        """One named bullet of the summary, or "" if it is absent."""
+        prefix = f"- **{label}:**"
+        for line in summary.splitlines():
+            if line.startswith(prefix):
+                return line[len(prefix):].strip()
+        return ""
+
     def test_the_counts_agree_across_both_outputs_and_sum_to_the_total(self):
         result, report, summary = self.both()
         counts = result["outcomes"]
@@ -1040,11 +1136,11 @@ class TwoOutputTest(PipelineTest):
         self.assertTrue(outcomes_mod.problems(merged))
 
     def test_a_confirmed_unmet_criterion_is_a_finding_not_a_schedule_item(self):
-        """It belongs in Attention needed, with the artifact that refutes it.
+        """It belongs under Decisions needed, with the artifact that refutes it.
 
         Describing it as "tracked and incomplete" alongside work still in
-        flight is the failure: a reader skims Remaining as a list of things
-        that will arrive, and this is a thing that will not.
+        flight is the failure: a reader skims Remaining work as a list of
+        things that will arrive, and this is a thing that will not.
         """
         declared = assessment(
             "AC2", "No evidence found",
@@ -1053,14 +1149,30 @@ class TwoOutputTest(PipelineTest):
         )
         declared["outcome"] = "confirmed-unmet"
         _, _, summary = self.both(assessments=[self._merged(), declared])
-        attention = next(
-            line for line in summary.splitlines() if line.startswith("- Attention needed:")
+        decisions = self.bullet(summary, "Decisions needed")
+        self.assertIn("contradicted by something inspected", decisions)
+        self.assertIn("confirm whether each still describes intended behaviour", decisions)
+        self.assertNotIn("AC2", self.bullet(summary, "Remaining work"))
+
+    def test_a_confirmed_unmet_criterion_does_not_prescribe_reopening_the_work(self):
+        """Two answers, and the renderer is not entitled to pick one.
+
+        "Reopen the work or revise the criterion" is a recommendation made
+        before anyone has asked the question the finding actually raises -
+        whether the criterion still describes what is intended to ship.
+        """
+        declared = assessment(
+            "AC2", "No evidence found",
+            [{"ref": PR_B, "kind": "pr", "state": "merged", "at": "2026-09-20T09:00:00Z"}],
+            "merged",
         )
-        self.assertIn("is not satisfied", attention)
-        self.assertIn("decide whether to reopen the work or revise the criterion", attention)
-        remaining = next(line for line in summary.splitlines() if line.startswith("- Remaining:"))
-        self.assertNotIn("AC2", remaining)
-        self.assertIn("reopen or re-scope AC2", summary)
+        declared["outcome"] = "confirmed-unmet"
+        _, _, summary = self.both(assessments=[self._merged(), declared])
+        for prescription in ("reopen", "re-scope", "revise the criterion"):
+            self.assertNotIn(prescription, summary.lower())
+        self.assertIn(
+            "record whether each stands as written", self.bullet(summary, "Next actions")
+        )
 
     def test_an_open_decision_names_the_decision(self):
         claim = assessment(
@@ -1113,8 +1225,8 @@ class TwoOutputTest(PipelineTest):
     def test_an_unmapped_criterion_becomes_a_tracking_clarification(self):
         _, report, summary = self.both()
         self.assertIn("Tracking clarification", report)
-        self.assertIn("Identify and link the work covering AC2", report)
-        self.assertIn("identify and link the work covering AC2", summary)
+        self.assertIn(f"Identify and link the work covering {KEY} AC2", report)
+        self.assertIn("identify and link the owning upstream work", summary)
         # The thing it must never say: that some other epic already has it.
         self.assertNotIn("is covered by", summary)
 
@@ -1257,8 +1369,705 @@ class TwoOutputTest(PipelineTest):
             ],
             generated_at="2026-10-08T00:00:00Z",
         )
-        self.assertIn("The criteria set changed (2→3), so these are not like-for-like", summary)
-        self.assertIn("unverified 1→2", summary)
+        self.assertIn("1 criterion added (2→3)", summary)
+        self.assertIn("The outcome counts are not comparable across a scope change", summary)
+        # The failure this replaces: "unverified 1→2" beside "since the last
+        # assessment" reads as a criterion going backwards, when what happened
+        # is that somebody wrote down one more of the things they wanted.
+        self.assertNotIn("unverified 1→2", summary)
+
+
+def multi_source(count_per_key=4, keys=("RHAIGW-399", "RHAIGW-400", "RHAIGW-401")):
+    """Criteria spread over several Jira issues, with ids that collide.
+
+    `AC1` exists once per key here, which is the normal shape of a rollup over
+    an epic's worth of Jira issues and the shape every id-keyed lookup got
+    wrong.
+    """
+    requirements = []
+    for key in keys:
+        for index in range(1, count_per_key + 1):
+            requirements.append(
+                {
+                    "id": f"AC{index}",
+                    "sourceKey": key,
+                    "type": "AC" if index % 2 else "SC",
+                    "text": f"{key} criterion {index}.",
+                    "assessment": "No evidence found",
+                    "evidence": [],
+                    "evidenceState": "none",
+                    "downstream": {"state": "unknown", "detail": None},
+                }
+            )
+    return requirements
+
+
+class SummaryRenderTest(unittest.TestCase):
+    """The rules that keep the Jira summary readable at 49 criteria.
+
+    Rendered directly rather than through the pipeline: these are properties
+    of the renderer given an assessment, and nothing here depends on how the
+    assessment was reached.
+    """
+
+    def render(self, requirements, narrative=None, **assembly):
+        base = {
+            "generatedAt": "2026-10-01T00:00:00Z",
+            "jira": {"key": "RHAIGW-397", "summary": "Guardrails"},
+            "manifest": {"children": [], "epics": [], "observed": True},
+            "requirements": requirements,
+            "mappings": [],
+            "narrative": narrative or [],
+        }
+        base.update(assembly)
+        tallied = outcomes_mod.tally(requirements)
+        confidence = outcomes_mod.confidence(base, requirements, tallied)
+        return summary_mod.render(base, tallied, confidence)
+
+    def test_every_criterion_reference_names_its_source_jira(self):
+        """`AC1` belongs to three issues here. Unqualified, it points at none."""
+        summary = self.render(multi_source(count_per_key=1))
+        bullets = [line for line in summary.splitlines() if line.startswith("- **")]
+        self.assertTrue(any("RHAIGW-399 AC1" in line for line in bullets))
+        # Every `AC1` in a bullet is preceded by the key that owns it. Three
+        # issues have one, so a bare id points at none of them.
+        for line in bullets:
+            for index in range(len(line)):
+                if line.startswith("AC1", index):
+                    self.assertRegex(line[max(0, index - 11):index], r"RHAIGW-\d+ $", line)
+
+    def test_a_long_enumeration_collapses_to_counts_grouped_by_jira_issue(self):
+        summary = self.render(multi_source(count_per_key=6))
+        remaining = next(
+            line for line in summary.splitlines() if line.startswith("- **Remaining work:**")
+        )
+        explicit = remaining.count("RHAIGW-399 AC") + remaining.count("RHAIGW-400 AC") \
+            + remaining.count("RHAIGW-401 AC")
+        self.assertLessEqual(explicit, summary_mod.MAX_REFS_PER_BULLET)
+        self.assertIn("more — ", remaining)
+        self.assertIn("on RHAIGW-401", remaining)
+        # The suffix is already inside one pair of brackets; a second pair
+        # inside it is what the collapse was meant to spare the reader.
+        self.assertNotIn("more (", remaining)
+
+    def test_a_criterion_is_named_in_one_bullet_and_counted_in_the_rest(self):
+        """The same eight ids under three headings reads as 24 problems."""
+        requirements = multi_source(count_per_key=2)
+        requirements[0]["unresolvedClauses"] = ["the retention window is TBD"]
+        summary = self.render(requirements)
+        named = [
+            line for line in summary.splitlines()
+            if line.startswith("- **") and "RHAIGW-399 AC1" in line
+        ]
+        self.assertEqual(len(named), 1, "a criterion is named explicitly in exactly one bullet")
+
+    def test_the_four_bullets_are_present_and_in_order(self):
+        summary = self.render(multi_source(count_per_key=2))
+        order = [
+            index
+            for label in ("Evidence established", "Remaining work", "Decisions needed",
+                          "Next actions")
+            for index, line in enumerate(summary.splitlines())
+            if line.startswith(f"- **{label}:**")
+        ]
+        self.assertEqual(len(order), 4, summary)
+        self.assertEqual(order, sorted(order))
+
+    def test_types_are_counted_separately_and_never_summed(self):
+        summary = self.render(multi_source(count_per_key=4))
+        self.assertIn("acceptance criteria", summary)
+        self.assertIn("success criteria", summary)
+        self.assertIn("counted separately", summary)
+        self.assertNotIn("% complete", summary)
+
+    def test_narrative_carries_the_bullet_and_traces_to_its_rows(self):
+        requirements = multi_source(count_per_key=2)
+        requirements[0].update(
+            assessment="Evidence found",
+            evidence=[{"ref": PR_A, "kind": "pr", "state": "merged",
+                       "at": "2026-09-18T09:00:00Z"}],
+            evidenceState="merged",
+        )
+        summary = self.render(
+            requirements,
+            narrative=[
+                {
+                    "bullet": "evidence-established",
+                    "text": "Prohibited-topic rails fire on buffered responses",
+                    "refs": [{"sourceKey": "RHAIGW-399", "id": "AC1"}],
+                    "links": [PR_A],
+                }
+            ],
+        )
+        established = next(
+            line for line in summary.splitlines()
+            if line.startswith("- **Evidence established:**")
+        )
+        self.assertIn("Prohibited-topic rails fire on buffered responses", established)
+        self.assertIn("RHAIGW-399 AC1", established)
+        self.assertIn(f"https://github.com/{PR_A.split('#')[0]}/pull/500", established)
+
+
+class NarrativeTraceabilityTest(unittest.TestCase):
+    """Structural checks on model prose, and the line they stop at.
+
+    These prove a claim can be traced to rows that exist. None of them proves
+    the claim is true; that reading of the evidence is the model's and stays
+    the model's.
+    """
+
+    def rows(self):
+        return multi_source(count_per_key=2)
+
+    def test_a_claim_citing_a_row_that_does_not_exist_is_refused(self):
+        problems = summary_mod.narrative_problems(
+            [{"bullet": "remaining-work", "text": "Observability is untracked",
+              "refs": [{"sourceKey": "RHAIGW-399", "id": "SC99"}]}],
+            self.rows(),
+        )
+        self.assertTrue(any("not an assessed requirement" in p for p in problems))
+
+    def test_the_same_id_on_the_wrong_jira_issue_is_refused(self):
+        """Traceability keyed on `(sourceKey, id)`, because ids repeat."""
+        problems = summary_mod.narrative_problems(
+            [{"bullet": "remaining-work", "text": "x",
+              "refs": [{"sourceKey": "RHAIGW-402", "id": "AC1"}]}],
+            self.rows(),
+        )
+        self.assertTrue(any("RHAIGW-402" in p for p in problems))
+
+    def test_a_claim_with_no_rows_at_all_is_refused(self):
+        problems = summary_mod.narrative_problems(
+            [{"bullet": "next-actions", "text": "Ship it", "refs": []}], self.rows()
+        )
+        self.assertTrue(any("cites no assessment row" in p for p in problems))
+
+    def test_an_established_claim_cannot_rest_on_an_unverified_row(self):
+        problems = summary_mod.narrative_problems(
+            [{"bullet": "evidence-established", "text": "Streaming is enforced",
+              "refs": [{"sourceKey": "RHAIGW-399", "id": "AC1"}]}],
+            self.rows(),
+        )
+        self.assertTrue(any("cannot establish a capability" in p for p in problems))
+
+    def test_a_link_not_carried_by_a_cited_row_is_refused(self):
+        rows = self.rows()
+        rows[0].update(
+            assessment="Evidence found", evidenceState="merged",
+            evidence=[{"ref": PR_A, "kind": "pr", "state": "merged"}],
+        )
+        problems = summary_mod.narrative_problems(
+            [{"bullet": "evidence-established", "text": "Rails fire",
+              "refs": [{"sourceKey": "RHAIGW-399", "id": "AC1"}], "links": [PR_B]}],
+            rows,
+        )
+        self.assertTrue(any("not evidence on any row it cites" in p for p in problems))
+
+    def test_a_well_formed_claim_passes(self):
+        rows = self.rows()
+        rows[0].update(
+            assessment="Evidence found", evidenceState="merged",
+            evidence=[{"ref": PR_A, "kind": "pr", "state": "merged"}],
+        )
+        self.assertEqual(
+            summary_mod.narrative_problems(
+                [{"bullet": "evidence-established", "text": "Rails fire",
+                  "refs": [{"sourceKey": "RHAIGW-399", "id": "AC1"}], "links": [PR_A]}],
+                rows,
+            ),
+            [],
+        )
+
+    def test_structural_checks_do_not_claim_the_prose_is_correct(self):
+        """A traceable claim that misreads its evidence still passes. By design.
+
+        Recorded as a test so nobody later reads the validator as a fact
+        checker and stops reviewing the summary.
+        """
+        rows = self.rows()
+        rows[0].update(
+            assessment="Evidence found", evidenceState="merged",
+            evidence=[{"ref": PR_A, "kind": "pr", "state": "merged"}],
+        )
+        self.assertEqual(
+            summary_mod.narrative_problems(
+                [{"bullet": "evidence-established",
+                  "text": "This criterion is fully verified in production",
+                  "refs": [{"sourceKey": "RHAIGW-399", "id": "AC1"}]}],
+                rows,
+            ),
+            [],
+        )
+
+
+class UnscopedClaimTest(unittest.TestCase):
+    """A traversal of one epic cannot establish that something does not exist."""
+
+    def test_an_absolute_absence_claim_is_refused(self):
+        for text in (
+            "No upstream issue covers this.",
+            "There is no upstream work for observability.",
+            "No PR exists for streaming enforcement.",
+        ):
+            self.assertTrue(
+                assemble_mod.unscoped_claims(text, "AC1 gap"), text
+            )
+
+    def test_a_claim_scoped_to_what_was_read_is_accepted(self):
+        for text in (
+            "No work in the traversed set covers this.",
+            "Nothing inspected supports the streaming clause.",
+            "No upstream issue in the epics traversed is linked to this criterion.",
+        ):
+            self.assertEqual(assemble_mod.unscoped_claims(text, "AC1 gap"), [], text)
+
+    def test_the_gap_field_is_checked_at_merge_time(self):
+        record = {"assessment": "No evidence found", "evidence": [],
+                  "gap": "No upstream issue covers this."}
+        self.assertTrue(
+            any("claims more than a traversal can show" in p
+                for p in assemble_mod._validate(record, "AC1"))
+        )
+
+
+class MatchedPairTest(unittest.TestCase):
+    """Movement computed over the right rows when ids repeat across issues."""
+
+    def pairs(self):
+        return [
+            {"sourceKey": "RHAIGW-399", "currentId": "AC1", "previousId": "AC1",
+             "previousAssessment": "No evidence found", "textChanged": False},
+            {"sourceKey": "RHAIGW-400", "currentId": "AC1", "previousId": "AC1",
+             "previousAssessment": "No evidence found", "textChanged": False},
+        ]
+
+    def current(self):
+        rows = multi_source(count_per_key=1, keys=("RHAIGW-399", "RHAIGW-400"))
+        rows[0]["assessment"] = "Evidence found"
+        rows[0]["evidence"] = [{"ref": PR_A, "at": "2026-10-21T00:00:00Z"}]
+        return rows
+
+    def test_like_for_like_counts_both_issues_not_one(self):
+        like = metrics_mod.like_for_like(self.pairs(), self.current())
+        self.assertEqual(like["total"], 2, "id-keyed lookup used to collapse these to one")
+        self.assertEqual(like["current"]["numerator"], 1)
+
+    def test_a_change_is_attributed_to_the_issue_that_owns_it(self):
+        changes = metrics_mod.classify_assessment_changes(
+            self.pairs(), self.current(), "2026-10-01T00:00:00Z"
+        )
+        self.assertEqual(len(changes), 1)
+        self.assertEqual(changes[0]["sourceKey"], "RHAIGW-399")
+        self.assertEqual(changes[0]["cause"], "implementation-progress")
+
+    def test_a_pair_without_a_source_key_is_skipped_when_the_id_is_ambiguous(self):
+        """Older snapshots have no `sourceKey`. An arbitrary match is worse than none."""
+        legacy = [{"currentId": "AC1", "previousId": "AC1",
+                   "previousAssessment": "No evidence found", "textChanged": False}]
+        self.assertIsNone(metrics_mod.like_for_like(legacy, self.current()))
+
+
+class HtmlReportTest(unittest.TestCase):
+    """The third rendering, held to the same standard as the other two.
+
+    An HTML file gets forwarded, opened on a phone and printed, which the
+    Markdown does not, so the things that matter here are: the counts agree
+    with the tally the Jira comment carries, nothing it says is invented to
+    fill a gap, and nothing a stranger wrote in an issue body can execute when
+    somebody opens it.
+    """
+
+    def render(self, requirements, **assembly):
+        base = {
+            "generatedAt": "2026-10-01T00:00:00Z",
+            "jira": {"key": "RHAIGW-397", "summary": "Guardrails",
+                     "site": "https://jira.example.com"},
+            "manifest": {"children": [], "epics": [EPIC], "observed": True},
+            "requirements": requirements,
+            "mappings": [{"ref": EPIC, "url": f"https://github.com/{EPIC}"}],
+            "narrative": [],
+        }
+        base.update(assembly)
+        return htmlreport_mod.render(base, outcomes_mod.tally(requirements))
+
+    def rows(self, document):
+        return re.findall(r"<details class=\"row\"(.*?)</details>", document, re.S)
+
+    # --- counts ----------------------------------------------------------
+
+    def test_each_requirement_type_is_counted_on_its_own_row(self):
+        """Eight met acceptance criteria and zero met success criteria is not "8 of 16"."""
+        requirements = []
+        for kind, outcome in (("AC", "Evidence found"), ("SC", "No evidence found"),
+                              ("DoD", "Partial evidence")):
+            for index in range(1, 3):
+                requirements.append({
+                    "id": f"{kind}{index}", "sourceKey": "RHAIGW-399", "type": kind,
+                    "text": f"{kind} {index}.", "assessment": outcome,
+                    "evidence": [{"ref": PR_A, "kind": "pr"}] if outcome != "No evidence found" else [],
+                    "downstream": {"state": "unknown"},
+                })
+        document = self.render(requirements)
+        table = document.split("Assessment context")[0]
+        for label, cells in (
+            ("Acceptance criteria", ["2", "0", "0", "0"]),
+            ("Success criteria", ["0", "0", "0", "2"]),
+            ("Definition-of-done items", ["0", "2", "0", "0"]),
+        ):
+            row = re.search(
+                rf'<th scope="row">{label}</th>(.*?)</tr>', table, re.S
+            )
+            self.assertIsNotNone(row, label)
+            self.assertEqual(re.findall(r">(\d+)</td>", row.group(1)), cells, label)
+        # No combined score anywhere: the three types are not interchangeable
+        # units of delivery and a percentage over them would say they are.
+        self.assertNotIn("% complete", document)
+        self.assertNotIn("Completion", document)
+
+    def test_the_totals_row_is_the_tally_the_jira_summary_carries(self):
+        requirements = multi_source(count_per_key=2)
+        tallied = outcomes_mod.tally(requirements)
+        document = self.render(requirements)
+        problems = assemble_mod._html_problems(document, tallied, requirements)
+        self.assertEqual(problems, [])
+        # And a document rendered from a different tally is caught, which is
+        # the only reason the check is worth having.
+        other = outcomes_mod.tally(multi_source(count_per_key=1))
+        self.assertTrue(assemble_mod._html_problems(document, other, requirements))
+
+    def test_the_third_outcome_column_says_confirmed_unmet_not_unmet(self):
+        """"Unmet" invites a reader to file "we did not look" under it."""
+        document = self.render(multi_source(count_per_key=1))
+        self.assertIn("Confirmed unmet", document)
+
+    def test_the_live_count_starts_at_every_criterion(self):
+        document = self.render(multi_source(count_per_key=3))
+        self.assertIn("Showing all 9 criteria", document)
+        self.assertEqual(len(self.rows(document)), 9)
+
+    # --- identity --------------------------------------------------------
+
+    def test_every_criterion_id_is_qualified_with_its_source_jira(self):
+        """`AC1` belongs to three issues here. A bare one points at none."""
+        document = self.render(multi_source(count_per_key=2))
+        for row in self.rows(document):
+            label = re.search(r'<span class="cid">([^<]+)</span>', row)
+            self.assertIsNotNone(label, row[:200])
+            self.assertRegex(label.group(1), r"^RHAIGW-\d+ AC\d+$")
+
+    def test_each_group_is_headed_by_its_linked_jira_issue(self):
+        document = self.render(
+            multi_source(count_per_key=1),
+            jira={"key": "RHAIGW-397", "summary": "Guardrails",
+                  "site": "https://jira.example.com",
+                  "children": [{"key": "RHAIGW-399", "summary": "Policy surface"}]},
+        )
+        self.assertIn(
+            '<a href="https://jira.example.com/browse/RHAIGW-399" rel="noreferrer noopener">'
+            "RHAIGW-399 — Policy surface</a>",
+            document,
+        )
+        # No title recorded for this one, so the key stands alone rather than
+        # borrowing the parent's.
+        self.assertIn(">RHAIGW-400</a>", document)
+
+    # --- missing data ----------------------------------------------------
+
+    def test_an_uninspected_downstream_step_is_not_reported_as_a_negative_result(self):
+        requirements = multi_source(count_per_key=1, keys=("RHAIGW-399",))
+        document = self.render(requirements)
+        self.assertIn("Not inspected", document)
+        self.assertIn("that is not confirmation that none is required", document)
+        self.assertNotIn("No downstream step is required", document)
+
+    def test_an_absent_release_target_and_baseline_say_so(self):
+        document = self.render(multi_source(count_per_key=1))
+        self.assertIn("Not recorded on the Jira issue", document)
+        self.assertIn("baseline established by this run", document)
+        self.assertIn("No baseline to compare against.", document)
+        self.assertIn("nothing to compare against", document)
+
+    def test_movement_is_withheld_rather_than_computed_across_a_changed_scope(self):
+        """A ratio whose denominator moved is not movement in the work."""
+        document = self.render(
+            multi_source(count_per_key=2),
+            diff={
+                "baseline": {"generatedAt": "2026-09-01T00:00:00Z", "publication": "published"},
+                "requirementChanges": {"added": [{"id": "AC9", "sourceKey": "RHAIGW-399"}]},
+                "matchedPairs": [],
+            },
+        )
+        self.assertIn("Numerical movement is unavailable", document)
+        self.assertIn("different denominators", document)
+        self.assertIn("1 added", document)
+        # Scope growth is reported as scope, never as delivery.
+        self.assertIn("A larger assessed inventory is not delivery progress", document)
+
+    def test_newly_visible_evidence_is_not_reported_as_new_implementation(self):
+        requirements = multi_source(count_per_key=1, keys=("RHAIGW-399",))
+        requirements[0].update(
+            assessment="Evidence found",
+            evidence=[{"ref": PR_A, "kind": "pr", "at": "2026-08-01T00:00:00Z"}],
+        )
+        document = self.render(
+            requirements,
+            diff={
+                "baseline": {"generatedAt": "2026-09-01T00:00:00Z"},
+                "matchedPairs": [{"sourceKey": "RHAIGW-399", "currentId": "AC1",
+                                  "previousId": "AC1",
+                                  "previousAssessment": "No evidence found",
+                                  "textChanged": False}],
+            },
+        )
+        self.assertIn("Newly discovered evidence, not newly done work", document)
+        self.assertNotIn("New implementation", document)
+
+    # --- limitations -----------------------------------------------------
+
+    def test_an_incomplete_traversal_raises_the_banner_and_names_the_branch(self):
+        document = self.render(
+            multi_source(count_per_key=1),
+            manifest={
+                "children": [], "epics": [EPIC], "observed": True,
+                "traversalComplete": False,
+                "untraversed": [{"ref": "example-org/example-quota#900",
+                                 "reason": "already 1 level below the mapped epic",
+                                 "nestedVia": "sub-issue"}],
+                "access": [{"ref": "example-org/private#1", "status": "forbidden",
+                            "detail": "not visible to this account"}],
+            },
+        )
+        self.assertIn("Material collection limitations apply", document)
+        self.assertIn("example-org/example-quota#900", document)
+        self.assertIn("Traversal did not complete", document)
+        self.assertIn("not visible to this account", document)
+        self.assertIn("a floor, not a total", document)
+
+    def test_a_clean_run_gets_no_banner_rather_than_a_manufactured_warning(self):
+        document = self.render(multi_source(count_per_key=1))
+        self.assertNotIn('class="banner"', document)
+        self.assertNotIn("Material collection limitations", document)
+
+    def test_an_unmapped_epic_is_unassessable_not_unstarted(self):
+        document = self.render(
+            multi_source(count_per_key=1),
+            mappings=[],
+            manifest={"children": [], "epics": [], "observed": False,
+                      "unobservedReason": "no upstream link on the Jira issue"},
+        )
+        self.assertIn("Upstream coverage is unassessable here, not absent", document)
+        self.assertNotIn("Not started", document)
+
+    # --- evidence and narrative ------------------------------------------
+
+    def test_evidence_links_carry_their_state_date_and_commit_pinned_files(self):
+        requirements = multi_source(count_per_key=1, keys=("RHAIGW-399",))
+        requirements[0].update(
+            assessment="Evidence found",
+            evidenceState="tested",
+            evidence=[{
+                "ref": PR_A, "kind": "pr", "state": "merged", "at": "2026-09-18T09:00:00Z",
+                "files": [{"repo": "example-org/example-quota", "commit": "9f3c2abdeadbeef",
+                           "path": "src/quota/tier.rs"}],
+            }],
+        )
+        document = self.render(requirements)
+        self.assertIn(f"https://github.com/{PR_A.split('#')[0]}/pull/500", document)
+        self.assertIn("merged · 2026-09-18", document)
+        self.assertIn(
+            "https://github.com/example-org/example-quota/blob/9f3c2abdeadbeef/src/quota/tier.rs",
+            document,
+        )
+        self.assertIn("@ 9f3c2ab", document)
+        self.assertIn("Test execution verified in CI", document)
+
+    def test_a_file_without_a_recorded_commit_is_dropped_rather_than_floated(self):
+        """An unpinned path points at whatever that file says today."""
+        requirements = multi_source(count_per_key=1, keys=("RHAIGW-399",))
+        requirements[0].update(
+            assessment="Evidence found",
+            evidence=[{"ref": PR_A, "kind": "pr",
+                       "files": [{"repo": "example-org/example-quota",
+                                  "path": "src/quota/tier.rs"}]}],
+        )
+        self.assertNotIn("src/quota/tier.rs", self.render(requirements))
+
+    def test_narrative_entries_carry_their_rows_and_their_links(self):
+        requirements = multi_source(count_per_key=1, keys=("RHAIGW-399",))
+        requirements[0].update(
+            assessment="Evidence found",
+            evidence=[{"ref": PR_A, "kind": "pr", "state": "merged"}],
+        )
+        document = self.render(
+            requirements,
+            narrative=[{"bullet": "decisions-needed",
+                        "text": "Whether metering counts denials is unrecorded",
+                        "refs": [{"sourceKey": "RHAIGW-399", "id": "AC1"}],
+                        "links": [PR_A]}],
+        )
+        self.assertIn("Decisions needed", document)
+        self.assertIn("Whether metering counts denials is unrecorded", document)
+        self.assertIn(">RHAIGW-399 AC1</a>", document)
+        self.assertIn(f"https://github.com/{PR_A.split('#')[0]}/pull/500", document)
+
+    def test_a_dependency_gets_no_owner_or_date_unless_a_source_recorded_one(self):
+        document = self.render(
+            multi_source(count_per_key=1, keys=("RHAIGW-399",)),
+            dependencies=[{"ref": "example-org/example-quota#901", "criteria": ["AC1"],
+                           "note": "Named on an issue that was read."}],
+        )
+        self.assertIn("Named on an issue that was read.", document)
+        self.assertNotIn("Owner", document)
+        self.assertNotIn("Unassigned", document)
+
+    # --- escaping and unsafe links ---------------------------------------
+
+    def test_markup_in_issue_text_is_escaped_rather_than_rendered(self):
+        hostile = "<img src=x onerror=alert(1)>&\"'</details><script>alert(2)</script>"
+        requirements = multi_source(count_per_key=1, keys=("RHAIGW-399",))
+        requirements[0].update(
+            text=hostile,
+            coverageDetail=hostile,
+            gap=hostile,
+            uncoveredClauses=[hostile],
+            downstream={"state": "pending", "detail": hostile},
+        )
+        document = self.render(
+            requirements,
+            jira={"key": "RHAIGW-397", "summary": hostile, "site": "https://jira.example.com"},
+        )
+        self.assertNotIn("<img", document)
+        self.assertNotIn("<script>alert(2)", document)
+        self.assertNotIn("</details><script>", document)
+        # The string survives in full; what it does not do is open a tag.
+        self.assertIn("&lt;img src=x onerror=alert(1)&gt;", document)
+        self.assertIn("&amp;&quot;&#x27;&lt;/details&gt;", document)
+        # Exactly one script element: the embedded filter logic, nothing else.
+        self.assertEqual(document.count("<script"), 1)
+        # And the row survived: escaping must not break out of the disclosure.
+        self.assertEqual(len(self.rows(document)), 1)
+
+    def test_a_search_attribute_cannot_be_broken_out_of(self):
+        requirements = multi_source(count_per_key=1, keys=("RHAIGW-399",))
+        requirements[0]["text"] = '" data-attention="0" x="'
+        document = self.render(requirements)
+        self.assertIn("&quot;", document)
+        self.assertEqual(document.count('data-attention="1"'), 1)
+        self.assertNotIn('data-attention="0"', document)
+
+    def test_a_non_http_url_renders_as_text_and_never_as_an_href(self):
+        for hostile in ("javascript:alert(1)", "data:text/html;base64,PHNjcmlwdD4=",
+                        "file:///etc/passwd", "full-assessment.html"):
+            self.assertIsNone(links_mod.safe_url(hostile), hostile)
+            document = self.render(
+                multi_source(count_per_key=1, keys=("RHAIGW-399",)),
+                mappings=[{"ref": EPIC, "url": hostile, "title": "Epic"}],
+            )
+            self.assertNotIn(f'href="{hostile}"', document)
+            self.assertNotIn("javascript:", document)
+
+    def test_a_relative_path_is_not_published_as_a_jira_full_assessment_link(self):
+        """A local HTML file is not a durable link; it 404s against the Jira host."""
+        requirements = multi_source(count_per_key=1, keys=("RHAIGW-399",))
+        tallied = outcomes_mod.tally(requirements)
+        base = {"generatedAt": "2026-10-01T00:00:00Z",
+                "jira": {"key": "RHAIGW-397", "summary": "Guardrails"},
+                "manifest": {"children": [], "epics": [], "observed": True},
+                "requirements": requirements, "mappings": [], "narrative": []}
+        confidence = outcomes_mod.confidence(base, requirements, tallied)
+        for bad in ("full-assessment.html", "/tmp/out.html", "file:///tmp/out.html"):
+            rendered = summary_mod.render(base, tallied, confidence, full_assessment_url=bad)
+            self.assertNotIn("Full assessment", rendered, bad)
+        good = summary_mod.render(
+            base, tallied, confidence,
+            full_assessment_url="https://reports.example.com/RHAIGW-397.html",
+        )
+        self.assertIn("[Full assessment](https://reports.example.com/RHAIGW-397.html)", good)
+
+    def test_no_local_path_or_external_resource_reaches_the_document(self):
+        document = self.render(multi_source(count_per_key=2))
+        self.assertEqual(links_mod.unpublishable(document), [])
+        self.assertNotIn("@import", document)
+        self.assertNotIn("fetch(", document)
+        for url in re.findall(r'(?:href|src)="([^"#][^"]*)"', document):
+            self.assertRegex(url, r"^https://(github\.com|jira\.example\.com)/", url)
+
+    # --- structure --------------------------------------------------------
+
+    def test_the_document_is_balanced_and_self_contained(self):
+        document = self.render(multi_source(count_per_key=2))
+        self.assertTrue(document.startswith("<!DOCTYPE html>"))
+        parser = _TagBalance()
+        parser.feed(document)
+        self.assertEqual(parser.errors, [])
+        self.assertEqual([tag for tag, _ in parser.stack], [])
+        for element in ("toggle-all", "f-outcome", "f-type", "f-attention", "visible-count", "q"):
+            self.assertIn(f'id="{element}"', document)
+
+    def test_the_print_rules_both_open_the_rows_and_give_them_room(self):
+        """Forcing the panel to display is half a fix, and the half that prints wrong.
+
+        A closed `<details>` applies size containment to its content, so the
+        panel paints at full height while the row is sized as if empty - every
+        evidence panel lands on top of the rows beneath it. Nothing about that
+        is visible on screen, which is why it is asserted here.
+        """
+        document = self.render(multi_source(count_per_key=1))
+        print_rules = document.split("@media print {")[1]
+        self.assertIn("details.row > .detail { display: grid !important; }", print_rules)
+        self.assertIn("details.row::details-content", print_rules)
+        self.assertIn("content-visibility: visible", print_rules)
+        # And the fallback for a browser without `::details-content`.
+        self.assertIn("'beforeprint'", document)
+        self.assertIn("'afterprint'", document)
+        # Controls are the one thing paper must not carry.
+        self.assertIn(".no-print { display: none !important; }", print_rules)
+        self.assertIn('class="controls no-print"', document)
+        self.assertIn('class="toggle no-print"', document)
+
+    def test_the_sections_appear_in_the_contracted_order(self):
+        document = self.render(
+            multi_source(count_per_key=1),
+            narrative=[{"bullet": "next-actions", "text": "Link the telemetry work",
+                        "refs": [{"sourceKey": "RHAIGW-399", "id": "AC1"}]}],
+            manifest={"children": [], "epics": [EPIC], "observed": True,
+                      "traversalComplete": False},
+        )
+        order = [
+            document.index(marker)
+            for marker in ('class="head"', 'class="banner"', ">Overview<",
+                           ">Decisions and follow-up<", ">Requirement review<",
+                           ">Changes since baseline<", ">Collection scope and limitations<")
+        ]
+        self.assertEqual(order, sorted(order))
+
+
+class _TagBalance(html_parser.HTMLParser):
+    """Enough of a parser to prove no element is left open or crossed.
+
+    A browser will silently repair unbalanced markup, which is exactly why an
+    unclosed `<details>` would not show up by looking at the thing.
+    """
+
+    VOID = {"meta", "br", "hr", "img", "input", "link", "source", "col", "area", "base"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.stack, self.errors = [], []
+
+    def handle_starttag(self, tag, attrs):
+        if tag not in self.VOID:
+            self.stack.append((tag, self.getpos()))
+
+    def handle_endtag(self, tag):
+        if tag in self.VOID:
+            return
+        if not self.stack:
+            self.errors.append(f"stray </{tag}> at {self.getpos()}")
+            return
+        open_tag, where = self.stack.pop()
+        if open_tag != tag:
+            self.errors.append(f"</{tag}> at {self.getpos()} closes <{open_tag}> from {where}")
 
 
 class CliTest(unittest.TestCase):
@@ -1346,6 +2155,248 @@ class CliTest(unittest.TestCase):
 
         measured = json.loads(self.run_cli("measure", self.path("manifest.json")))
         self.assertGreater(measured["total"]["bytes"], 0)
+
+    def test_the_no_mapping_path_assembles_once_and_reports_the_jira_side(self):
+        """The partial run, exactly as SKILL.md spells it.
+
+        `assembly.json` has to exist before `assemble`: `--in` reads it, and
+        `--manifest`/`--diff` only override two of its keys. The procedure
+        used to run `assemble` against a file nobody had written and then send
+        the reader to a step that assembles again.
+        """
+        self.run_cli(
+            "collect", "--key", KEY, "--epics", "[]", "--out", self.path("manifest.json")
+        )
+        with open(self.path("manifest.json")) as handle:
+            manifest = json.load(handle)
+        self.assertFalse(manifest["observed"])
+
+        with open(self.path("requirements.json"), "w") as handle:
+            json.dump(REQUIREMENTS, handle)
+        self.run_cli(
+            "diff", "--manifest", self.path("manifest.json"),
+            "--requirements", self.path("requirements.json"),
+            "--out", self.path("diff.json"),
+        )
+        with open(self.path("assembly.json"), "w") as handle:
+            json.dump(
+                {"jira": {"key": KEY, "summary": "Tiered quota", "status": "In Progress"},
+                 "mappings": [],
+                 "summary": "No upstream source was inspected: no epic is linked."},
+                handle,
+            )
+        self.run_cli(
+            "assemble", "--in", self.path("assembly.json"),
+            "--manifest", self.path("manifest.json"),
+            "--diff", self.path("diff.json"),
+            "--requirements", self.path("requirements.json"),
+            "--assessments", "[]",
+            "--report", self.path("report.md"),
+            "--summary", self.path("summary.md"),
+            "--out", self.path("result.json"),
+        )
+        with open(self.path("result.json")) as handle:
+            result = json.load(handle)
+        with open(self.path("report.md")) as handle:
+            report = handle.read()
+        with open(self.path("summary.md")) as handle:
+            summary = handle.read()
+
+        # Both criteria are reported, neither is judged, and the child count
+        # is unknown rather than a zero nobody measured.
+        self.assertEqual(result["outcomes"]["unverified"], 2)
+        self.assertEqual(result["metrics"]["children"], "unknown")
+        self.assertIn("AC1 (RHOAIENG-7001)", report)
+        self.assertIn("Upstream coverage is unassessable, not absent.", report)
+        self.assertIn("No upstream epic is linked on this issue.", summary)
+        self.assertEqual(links_mod.unpublishable(summary), [])
+
+    def test_rerender_reproduces_the_saved_summary_without_reassessing(self):
+        narrative = [
+            {"bullet": "evidence-established",
+             "text": "Tier routing lands for the paid pool",
+             "refs": [{"sourceKey": KEY, "id": "AC1"}],
+             "links": [PR_A]},
+            {"bullet": "decisions-needed",
+             "text": "Whether metering counts denials is unrecorded",
+             "refs": [{"sourceKey": KEY, "id": "AC2"}]},
+        ]
+        self.run_cli(
+            "collect", "--key", KEY, "--epics", json.dumps([EPIC]),
+            "--out", self.path("manifest.json"),
+        )
+        with open(self.path("requirements.json"), "w") as handle:
+            json.dump(REQUIREMENTS, handle)
+        self.run_cli(
+            "diff", "--manifest", self.path("manifest.json"),
+            "--requirements", self.path("requirements.json"),
+            "--out", self.path("diff.json"),
+        )
+        with open(self.path("assessments.json"), "w") as handle:
+            json.dump(
+                [assessment("AC1", "Evidence found",
+                            [{"ref": PR_A, "kind": "pr", "state": "merged",
+                              "at": "2026-09-18T09:00:00Z"}], "merged"),
+                 assessment("AC2", "No evidence found", [], "none")],
+                handle,
+            )
+        with open(self.path("assembly.json"), "w") as handle:
+            json.dump(
+                {"jira": {"key": KEY, "summary": "Tiered quota", "status": "In Progress"},
+                 "mappings": [{"ref": EPIC, "url": f"https://github.com/{EPIC}"}],
+                 "summary": "Routing landed; metering is undecided."},
+                handle,
+            )
+        with open(self.path("narrative.json"), "w") as handle:
+            json.dump(narrative, handle)
+
+        self.run_cli(
+            "assemble", "--in", self.path("assembly.json"),
+            "--manifest", self.path("manifest.json"),
+            "--diff", self.path("diff.json"),
+            "--requirements", self.path("requirements.json"),
+            "--assessments", self.path("assessments.json"),
+            "--narrative", self.path("narrative.json"),
+            "--summary", self.path("summary.md"),
+            "--report", self.path("report.md"),
+            "--out", self.path("result.json"),
+        )
+        with open(self.path("result.json")) as handle:
+            result = json.load(handle)
+        with open(self.path("summary.md")) as handle:
+            original = handle.read()
+        self.assertEqual(result["narrativeClaims"], 2)
+        self.assertIn("Tier routing lands for the paid pool", original)
+
+        snapshot, _ = snapshots_mod.load(result["snapshotPath"])
+        self.assertEqual(snapshot["narrative"], narrative)
+        self.assertEqual(snapshot["summaryNarrative"], "Routing landed; metering is undecided.")
+
+        # No --title and no --site: everything the summary is rendered with
+        # has to come out of the snapshot, or "re-render" means "render a
+        # different document from the same rows".
+        self.assertEqual(snapshot["jiraSummary"], "Tiered quota")
+        self.run_cli(
+            "rerender", "--snapshot", result["snapshotPath"],
+            "--summary", self.path("again.md"),
+            "--report", self.path("again-report.md"),
+            "--out", self.path("again.json"),
+        )
+        with open(self.path("again.md")) as handle:
+            again = handle.read()
+        self.assertEqual(again, original, "re-rendering must reproduce what was reviewed")
+        with open(self.path("again-report.md")) as handle:
+            self.assertIn("Routing landed; metering is undecided.", handle.read())
+
+    def test_the_html_report_rerenders_from_a_snapshot_with_gh_removed(self):
+        """A snapshot is the whole input. Re-rendering must not reach anything.
+
+        `gh` is pointed at a binary that always fails and the cache directory
+        is deleted, so any attempt to collect - or to quietly fall back to a
+        cached payload - fails the run rather than producing a document that
+        looks the same but was assembled from something else.
+        """
+        self.run_cli(
+            "collect", "--key", KEY, "--epics", json.dumps([EPIC]),
+            "--out", self.path("manifest.json"),
+        )
+        with open(self.path("requirements.json"), "w") as handle:
+            json.dump(REQUIREMENTS, handle)
+        self.run_cli(
+            "diff", "--manifest", self.path("manifest.json"),
+            "--requirements", self.path("requirements.json"),
+            "--out", self.path("diff.json"),
+        )
+        with open(self.path("assessments.json"), "w") as handle:
+            json.dump(
+                [assessment("AC1", "Evidence found",
+                            [{"ref": PR_A, "kind": "pr", "state": "merged",
+                              "at": "2026-09-18T09:00:00Z"}], "merged"),
+                 assessment("AC2", "No evidence found", [], "none")],
+                handle,
+            )
+        with open(self.path("assembly.json"), "w") as handle:
+            json.dump(
+                {"jira": {"key": KEY, "summary": "Tiered quota",
+                          "site": "https://jira.example.com",
+                          "fixVersions": ["2026.3"]},
+                 "mappings": [{"ref": EPIC, "url": f"https://github.com/{EPIC}"}],
+                 "summary": "Routing landed; metering is undecided."},
+                handle,
+            )
+        self.run_cli(
+            "assemble", "--in", self.path("assembly.json"),
+            "--manifest", self.path("manifest.json"),
+            "--diff", self.path("diff.json"),
+            "--requirements", self.path("requirements.json"),
+            "--assessments", self.path("assessments.json"),
+            "--summary", self.path("summary.md"),
+            "--report", self.path("report.md"),
+            "--html", self.path("full.html"),
+            "--out", self.path("result.json"),
+        )
+        with open(self.path("result.json")) as handle:
+            result = json.load(handle)
+        self.assertEqual(result["htmlPath"], self.path("full.html"))
+        with open(self.path("full.html")) as handle:
+            first = handle.read()
+        # The document is written, not printed: stdout carries a byte count so
+        # a quarter of a megabyte of markup never lands in the conversation.
+        self.assertEqual(result["htmlBytes"], len(first.encode("utf-8")))
+
+        shutil.rmtree(os.path.join(self.home, "cache"), ignore_errors=True)
+        offline = dict(self.env, GH_BIN="/usr/bin/false")
+        proc = subprocess.run(
+            [sys.executable, os.path.join(SCRIPTS, "rollup.py"), "rerender",
+             "--snapshot", result["snapshotPath"],
+             "--summary", self.path("off.md"), "--report", self.path("off-report.md"),
+             "--html", self.path("off.html"), "--out", self.path("off.json")],
+            capture_output=True, text=True, env=offline,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        with open(self.path("off.html")) as handle:
+            again = handle.read()
+        self.assertEqual(again, first, "re-rendering must reproduce the reviewed document")
+
+        # The recorded release target survives the round trip. Without it on
+        # the snapshot the re-render would say "Not recorded on the Jira
+        # issue", which is a different and false statement.
+        self.assertIn("2026.3", again)
+        self.assertNotIn(self.home, again)
+        self.assertEqual(links_mod.unpublishable(again), [])
+
+    def _cache_checks(self):
+        """`pr-checks` is cached as a bare list, unlike every other kind."""
+        cache = cache_mod.Cache(KEY, root=os.path.join(self.home, "cache", KEY))
+        cache.put("pr-checks", EPIC, [
+            {"name": "unit", "state": "SUCCESS", "bucket": "pass"},
+            {"name": "signoff-check", "state": "FAILURE", "bucket": "fail"},
+        ])
+        return cache
+
+    def test_a_list_payload_is_read_whole_and_matched_by_line(self):
+        cache = self._cache_checks()
+        excerpt = json.loads(self.run_cli(
+            "excerpt", "--key", KEY, "--ref", EPIC, "--kind", "pr-checks",
+            "--field", "", "--match", "FAILURE", "--context", "1",
+            "--cache-dir", cache.root,
+        ))
+        # One line, not one blob: a compact dump would make every match return
+        # the whole payload, which is what excerpt exists to avoid.
+        self.assertEqual(excerpt["matchedLines"], 1)
+        self.assertIn("signoff-check", excerpt["text"])
+        self.assertNotIn("unit", excerpt["text"])
+
+    def test_a_field_path_into_a_list_payload_says_how_to_read_it(self):
+        cache = self._cache_checks()
+        proc = subprocess.run(
+            [sys.executable, os.path.join(SCRIPTS, "rollup.py"), "excerpt",
+             "--key", KEY, "--ref", EPIC, "--kind", "pr-checks",
+             "--field", "bucket", "--cache-dir", cache.root],
+            capture_output=True, text=True, env=self.env,
+        )
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("--field ''", proc.stderr)
 
 
 if __name__ == "__main__":

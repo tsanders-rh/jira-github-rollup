@@ -14,10 +14,21 @@ Every rule that an agent could get quietly wrong lives here as code:
 
 from __future__ import annotations
 
+from . import outcomes as outcomes_mod
 from . import util
 
 ASSESSMENTS = ("Evidence found", "Partial evidence", "No evidence found", "Unable to assess")
 DOWNSTREAM = ("confirmed", "pending", "unknown")
+
+# What each downstream state asserts, in the reader's terms. The distinction
+# that matters is between the two that look alike in a table: `unknown` is
+# nobody looked, `pending` is somebody looked and found nothing qualifying.
+# Collapsing them turns an unopened question into a negative result.
+DOWNSTREAM_LABELS = {
+    "confirmed": "Verified, with evidence",
+    "pending": "Inspected; no qualifying evidence found",
+    "unknown": "Not inspected",
+}
 
 UNKNOWN = "unknown"
 OBSERVED = "observed"
@@ -93,6 +104,41 @@ def child_metrics(children, observed=True, reason=None):
     return value
 
 
+def by_type(requirements):
+    """Outcomes counted separately for AC, SC and DoD, never pooled.
+
+    They are different kinds of claim. An acceptance criterion describes
+    behaviour someone can check, a success criterion describes an outcome the
+    feature is for, and a definition-of-done item is process. Adding them
+    produces a number that looks like feature completion and is not one -
+    which is why nothing here divides the sum by anything.
+    """
+    groups = {}
+    for requirement in requirements or []:
+        kind = requirement.get("type") or "REQ"
+        group = groups.setdefault(
+            kind,
+            {
+                "type": kind,
+                "total": 0,
+                "outcomes": {name: 0 for name in outcomes_mod.OUTCOMES},
+                "downstream": {name: 0 for name in DOWNSTREAM},
+            },
+        )
+        group["total"] += 1
+        group["outcomes"][outcomes_mod.classify(requirement)] += 1
+        state = ((requirement.get("downstream") or {}).get("state") or "unknown").lower()
+        group["downstream"][state if state in DOWNSTREAM else "unknown"] += 1
+    return [groups[kind] for kind in sorted(groups, key=_type_rank)]
+
+
+_TYPE_ORDER = ("AC", "SC", "DoD", "REQ")
+
+
+def _type_rank(kind):
+    return (_TYPE_ORDER.index(kind) if kind in _TYPE_ORDER else len(_TYPE_ORDER), kind)
+
+
 def requirement_metrics(requirements):
     counts = {name: 0 for name in ASSESSMENTS}
     downstream = {name: 0 for name in DOWNSTREAM}
@@ -117,6 +163,7 @@ def requirement_metrics(requirements):
         "coverage": coverage,
         "downstream": downstream_ratio,
         "mix": mix,
+        "byType": by_type(requirements),
         "total": total,
         "unassessed": unassessed,
     }
@@ -129,6 +176,7 @@ def compute(requirements, children, observed=True, unobserved_reason=None):
         "coverage": requirement_side["coverage"],
         "downstream": requirement_side["downstream"],
         "mix": requirement_side["mix"],
+        "byType": requirement_side["byType"],
         "total": requirement_side["total"],
         "unassessed": requirement_side["unassessed"],
     }
@@ -183,6 +231,32 @@ def bucket_delta(previous, current, keys):
     return " / ".join(parts)
 
 
+def _index(requirements):
+    """Criteria keyed by `(sourceKey, id)`, which is the only unique key here.
+
+    Criterion ids are unique within a Jira issue and nowhere else: a rollup
+    spanning six issues has `AC1` five or six times. Keying on the id alone
+    kept one of them and silently compared another issue's criterion against
+    it, so the movement numbers were drawn from the wrong rows.
+    """
+    return {(req.get("sourceKey"), req.get("id")): req for req in requirements or []}
+
+
+def _resolve(index, pair):
+    """The current requirement a matched pair refers to, or None.
+
+    Pairs written before `sourceKey` was recorded carry only an id. Those fall
+    back to a unique id match and are skipped when the id is ambiguous: a pair
+    that cannot be resolved to one row must not be resolved to an arbitrary
+    one.
+    """
+    key = pair.get("sourceKey")
+    if key is not None:
+        return index.get((key, pair.get("currentId")))
+    candidates = [req for (_, rid), req in index.items() if rid == pair.get("currentId")]
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def like_for_like(matched_pairs, current_requirements):
     """Movement restricted to requirements present and unchanged in both runs.
 
@@ -190,12 +264,12 @@ def like_for_like(matched_pairs, current_requirements):
     percentage that fell because somebody wrote down more of what they wanted
     reads as a project going backwards.
     """
-    by_id = {req.get("id"): req for req in current_requirements or []}
+    index = _index(current_requirements)
     previous_found = current_found = total = 0
     for pair in matched_pairs or []:
         if pair.get("textChanged"):
             continue
-        current = by_id.get(pair.get("currentId"))
+        current = _resolve(index, pair)
         if current is None:
             continue
         total += 1
@@ -221,12 +295,12 @@ def classify_assessment_changes(matched_pairs, current_requirements, baseline_ge
     a false status update produced by an honest pipeline.
     """
     baseline_time = util.parse_iso(baseline_generated_at)
-    by_id = {req.get("id"): req for req in current_requirements or []}
-    rank = {name: index for index, name in enumerate(ASSESSMENTS)}
+    index = _index(current_requirements)
+    rank = {name: position for position, name in enumerate(ASSESSMENTS)}
     results = []
 
     for pair in matched_pairs or []:
-        current = by_id.get(pair.get("currentId"))
+        current = _resolve(index, pair)
         if current is None:
             continue
         before = pair.get("previousAssessment")

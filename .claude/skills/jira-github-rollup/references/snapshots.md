@@ -95,6 +95,9 @@ absent finding.
 
   "jiraStatus": "In Progress",
   "rollupStatus": "In progress",
+  "jiraSummary": "Tiered quota enforcement",
+  "jiraSite": "https://issues.example.com",
+  "jiraFixVersions": ["2.26"],
 
   "mappings": [
     {
@@ -128,11 +131,32 @@ absent finding.
       { "ref": "example-org/example-meter#9", "state": "OPEN",
         "stateReason": "", "accessible": true }
     ],
+    "untraversed": [
+      { "ref": "example-org/example-gateway#1445", "title": "Audit and retention",
+        "nestedVia": "sub-issues", "discoveredVia": "timeline-cross-reference",
+        "depth": 1,
+        "reason": "reached only by timeline-cross-reference, which establishes a mention rather than membership" }
+    ],
     "traversalComplete": true,
     "traversalNotes": null,
     "observed": true,
     "unobservedReason": null
   },
+
+  "summaryNarrative": "Two to five sentences, as rendered in the full assessment's Summary.",
+  "summaryTrend": "no outcome changed since the last update posted here on 2026-09-18.",
+  "prose": {
+    "caveats": ["…"],
+    "risks": ["…"],
+    "dependencies": [],
+    "blocked": false
+  },
+  "narrative": [
+    { "bullet": "evidence-established",
+      "text": "Tier-based pool selection routes paid-tier requests and merged on 2026-09-18",
+      "refs": [{ "sourceKey": "RHOAIENG-1234", "id": "AC1" }],
+      "links": ["example-org/example-gateway#520"] }
+  ],
 
   "access": [
     { "ref": "example-org/example-dlp", "status": "unreadable",
@@ -209,6 +233,14 @@ Field notes that are easy to get wrong:
 | `scope.observed` | `false` when no epic could be read at all — no mapping, or every mapping inaccessible. This is what makes the child count render `unknown` instead of a zero nobody measured, so it must never be set `true` optimistically. |
 | `scope.unobservedKind` | One of `no-mapping`, `access-denied`, `not-found`, `unreadable` when `observed` is `false`. Everything a report says about an unobserved run is derived from it. A snapshot written before this field existed reads as `no-mapping`, which is what those runs already said. |
 | `scope.unobservedReason` | The same thing as a phrase, for display. |
+| `scope.untraversed` | Nested epics that were recorded and not walked, with the relation that found each and why it was left. Stored because both renderings read it: a limitation that only ever existed as free-text prose was one a reader could miss, and every `No evidence found` row in the run inherits it. Empty array means the traversal covered everything it found. |
+| `jiraSummary`, `jiraSite` | The issue title the heading uses and the site that makes `AC1 (RHOAIENG-1234)` a link. Neither is derivable from `jiraKey`, and without them `rerender` produces a visibly different document from the one that was reviewed. `rerender --title` / `--site` override them. |
+| `jiraFixVersions` | The recorded release target, for the same reason. The HTML report states it when recorded and says so when not, so leaving it out would turn a recorded fix version into "Not recorded on the Jira issue" on re-render — a different and false statement. It is also an input to delivery confidence. |
+| `summaryNarrative` | The full assessment's Summary paragraph, verbatim as supplied. |
+| `summaryTrend` | The rendered trend sentence. Computed against a baseline this file does not contain, so `rerender` replays it rather than recomputing it — otherwise a reviewed summary re-renders as "Baseline established." |
+| `prose` | The remaining model-written sections of the full assessment: `caveats`, `risks`, `dependencies`, `trendNotes`, `blocked`. Stored for the same reason as `narrative`: a re-render that dropped the caveats would quietly remove the limitation reporting. |
+| `narrative` | The Jira summary's bullet claims, each tagged with its bullet, the assessment rows it rests on, and the artifacts it links. Stored so `rerender` reproduces the text a reviewer approved instead of falling back to mechanical counts — a re-render that silently changed the prose would make the approved draft unreconstructable. |
+| `narrative[].refs` | `{sourceKey, id}` pairs, both parts required. `id` alone is ambiguous: six Jira issues in one rollup each have an `AC1`. |
 | `children[].contentHash` | Hash of the fields that constitute evidence — title, state, state reason, close date, body, and each PR's state, merge date and review state. **`updatedAt` is deliberately excluded**: a PR merging or a check flipping changes the evidence without touching the issue, and an `updatedAt` comparison would miss it. |
 | `children[].accessible` | `false` when the child could not be read this run. A child that disappears from the list is a removal; a child that stays with `accessible: false` is a loss of access, and they are different findings. |
 | `requirements[].reused` | `true` when this run carried the assessment forward rather than making it again. Provenance, not a verdict — it changes nothing a reader sees in the table. |
@@ -266,6 +298,11 @@ changes.
 
 Child issues match on `ref`. Epics match on `ref`. Neither is reordered in a way
 that matters.
+
+`matchedPairs` records `sourceKey` and `previousSourceKey` alongside the ids,
+and `metrics.like_for_like` resolves a pair through `(sourceKey, id)`. An id
+alone does not identify a row: a rollup spanning six Jira issues has six rows
+called `AC1`, and resolving by id picked whichever one came first.
 
 ## Metrics
 
@@ -366,11 +403,14 @@ computed from the same `assessment` field, by `jgr/outcomes.py`:
 
 ### Downstream qualification
 
-| State | Means |
-| --- | --- |
-| `confirmed` | A downstream artifact was inspected and establishes the requirement downstream |
-| `pending` | A specific downstream step was identified and inspected, and has not completed |
-| `unknown` | No downstream state was inspected, or none was identified to inspect |
+| State | Rendered as | Means |
+| --- | --- | --- |
+| `confirmed` | Verified, with evidence | A downstream artifact was inspected and establishes the requirement downstream |
+| `pending` | Inspected; no qualifying evidence found | A specific downstream step was identified and inspected, and has not completed |
+| `unknown` | Not inspected | No downstream state was inspected, or none was identified to inspect |
+
+The labels are long because the short ones were being read as each other.
+`metrics.DOWNSTREAM_LABELS` owns them, and both outputs use that one copy.
 
 `confirmed + pending + unknown` equals the requirement total, which is the same
 denominator as coverage.
@@ -450,6 +490,13 @@ Added scope lowers a percentage without anything having gone backwards. That mus
 be stated in the same breath as the percentage, not left for the reader to work
 out: *"Coverage 8/22 (36%), previously 8/20 (40%). Two requirements were added;
 no requirement lost evidence."*
+
+**Movement is only ever computed over the matched set.** When the total moved,
+the Jira summary's trend line reports the scope change and says the outcome
+counts are not comparable across it, rather than printing a delta. Nine
+criteria becoming forty-nine is a scope event; rendering it as `unverified
+4→42` states forty-two problems, none of which anyone found. The like-for-like
+figure belongs in the full assessment, which has room to qualify it.
 
 ### Labelling
 
