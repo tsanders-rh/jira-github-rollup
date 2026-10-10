@@ -16,6 +16,7 @@ its credibility.
 
 from __future__ import annotations
 
+from . import scope as scope_mod
 from . import util
 
 NEAR_MATCH_THRESHOLD = 0.62
@@ -185,7 +186,44 @@ def compare_inventory(baseline, manifest):
         "reopened": reopened,
         "accessLost": access_lost,
         "accessRestored": access_restored,
+        "dependenciesChanged": _dependency_changes(baseline, manifest),
     }
+
+
+def _dependency_changes(baseline, manifest):
+    """Declared dependencies whose state or readability moved since the baseline.
+
+    A dependency is not traversed, so nothing about it reaches a child's
+    content hash. Without this, a blocking issue could close - or become
+    unreadable - between runs and every assessment resting on it would be
+    reused unchanged.
+
+    A baseline that predates this field records no states, so every dependency
+    present then counts as changed: unknown is not unchanged, the same rule the
+    missing-content-hash case follows.
+    """
+    scope = (baseline or {}).get("scope") or {}
+    current = {
+        dependency["ref"]: dependency for dependency in manifest.get("dependencies") or []
+    }
+    stored = scope.get("dependencies")
+    if stored is None:
+        previously_seen = set(scope.get("otherInspected") or [])
+        return sorted(previously_seen & set(current)) if baseline else []
+
+    previous = {dependency["ref"]: dependency for dependency in stored}
+    moved = []
+    for ref in sorted(set(current) | set(previous)):
+        before, after = previous.get(ref), current.get(ref)
+        if before is None or after is None:
+            moved.append(ref)
+            continue
+        if any(
+            (before.get(field) or None) != (after.get(field) or None)
+            for field in ("state", "stateReason", "accessible")
+        ):
+            moved.append(ref)
+    return moved
 
 
 def _touches(requirement, refs):
@@ -241,6 +279,7 @@ def plan(baseline_info, manifest, requirements, mappings, full_refresh=False):
         + inventory["reopened"]
         + inventory["accessLost"]
         + inventory["accessRestored"]
+        + inventory["dependenciesChanged"]
     )
     new_evidence_available = bool(
         inventory["artifactsAdded"] or inventory["contentChanged"] or inventory["accessRestored"]
@@ -266,6 +305,17 @@ def plan(baseline_info, manifest, requirements, mappings, full_refresh=False):
             reason = "upstream artifacts changed and this requirement was not previously covered"
         elif entry["previous"].get("assessment") is None:
             reason = "the baseline carries no assessment for it"
+        elif (entry["previous"].get("downstream") or {}).get("state") == "pending":
+            # Downstream artifacts are outside the traversal, so no hash this
+            # differ computes can ever contradict a stored `pending`. Reusing it
+            # would republish "qualification outstanding" indefinitely, long
+            # after it stopped being something anyone checked. `unknown` is left
+            # reusable: nobody looked then, nobody looked now, and saying so
+            # again is still true.
+            reason = (
+                "downstream qualification was outstanding at the baseline and is not "
+                "observable from the upstream traversal"
+            )
 
         if reason:
             reassess.append(
@@ -346,7 +396,10 @@ def plan(baseline_info, manifest, requirements, mappings, full_refresh=False):
         "inventoryChanges": inventory,
         "reassess": reassess,
         "reuse": reuse,
-        "autoFill": None if observed else "unable-to-assess-missing-mapping",
+        "autoFill": None if observed else scope_mod.AUTO_FILL,
+        # The action an auto-filled row asks for depends on why nothing was
+        # observed: add a link, or get read access to the one already there.
+        "autoFillGap": None if observed else scope_mod.gap(manifest.get("unobservedKind")),
         "matchedPairs": [
             {
                 "currentId": m["current"].get("id"),

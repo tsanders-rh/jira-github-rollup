@@ -55,9 +55,15 @@ deleted at any time. See `references/pipeline.md`.
   file. Editing a Jira comment in place is what the skill does to avoid comment
   spam; it must not be allowed to destroy the baseline, which is exactly why the
   baseline lives here and not in the comment.
-- **Promotion is the one exception.** When a drafted rollup is approved and
-  posted, set `publication: "published"`, fill `publishedAt` and `jiraCommentId`,
-  and rename the file's suffix. Same file, same timestamp — it is the same run.
+- **Promotion is the one exception, and it is additive.** When a drafted rollup
+  is approved and posted, set `publication: "published"`, fill `publishedAt`,
+  `jiraCommentId` and `published`, and rename the file's suffix. Same file,
+  same timestamp — it is the same run.
+- **The assessment payload is immutable.** `jira`, `mappings`, `scope`,
+  `access`, `outcomes`, `requirements` and `inventory` are written once and
+  never modified, by promotion or anything else. Publication is a fact about a
+  Jira comment; it must never be able to edit what was judged. A re-render of a
+  past snapshot reproduces the old judgements for the same reason.
 - **Draft snapshots accumulate.** They are a few kB each. Do not prune them
   automatically; if the user asks, offer to delete drafts older than the most
   recent published snapshot, and never delete a published one without being asked
@@ -118,6 +124,10 @@ absent finding.
       }
     ],
     "otherInspected": ["example-org/example-meter#9"],
+    "dependencies": [
+      { "ref": "example-org/example-meter#9", "state": "OPEN",
+        "stateReason": "", "accessible": true }
+    ],
     "traversalComplete": true,
     "traversalNotes": null,
     "observed": true,
@@ -150,6 +160,7 @@ absent finding.
       ],
       "downstream": { "state": "unknown", "detail": "no downstream source inspected" },
       "unresolvedClauses": [],
+      "uncoveredClauses": [],
       "outcome": null,
       "refutingEvidence": [],
       "failureKind": null,
@@ -182,6 +193,8 @@ Field notes that are easy to get wrong:
 | `outcomes` | The four counts both outputs were rendered from, plus the caption that scopes them. Stored so a later reader sees what was reported without re-deriving it, and so a change in the mapping rules shows up against `rulesVersion`. Not used for matching or reuse. |
 | `requirements[].outcome` | `null` on every row except a deliberately declared `confirmed-unmet`. The other three outcomes are derived from `assessment` and are not stored per row — storing a derived value invites the two copies to drift. |
 | `requirements[].refutingEvidence` | What shows the criterion is *not* satisfied. Required for a `confirmed-unmet` claim and meaningless otherwise; `assemble` rejects the claim without it. |
+| `requirements[].uncoveredClauses` | Checkable clauses of the criterion that nothing inspected supports. Non-empty makes `Evidence found` a refusal, not a downgrade. Distinct from `unresolvedClauses`, which is for clauses nobody has *decided* yet — different lists because they need different follow-ups, from different people. |
+| `scope.dependencies` | Declared dependencies with the state they were in, so the next run can notice one closing. `scope.otherInspected` records only that they were looked at; a baseline written before this field forces reassessment of anything resting on them, because unknown is not unchanged. |
 | `baseline` | What *this* run compared against, so a reader of the file can reconstruct the chain. `null` on a baseline-establishing run. |
 | `mappings[].linkSource` | One of `upstream-development-section`, `labelled-web-link`, `user-supplied`, `incidental-description`, `incidental-comment`. A mapping change that is only a change of source is still a mapping change. |
 | `children[].ref` | Always `org/repo#number`, never a bare `#number`. This is the deduplication key. |
@@ -194,7 +207,8 @@ Field notes that are easy to get wrong:
 | `downstream.state` | `confirmed`, `pending`, or `unknown`. Nothing else. |
 | `rulesVersion` | The assessment rules the stored judgements were made under. A baseline written under a different value is reassessed in full rather than reused. Bump it in `jgr/snapshots.py` whenever a change to `references/requirements.md` would change a verdict. |
 | `scope.observed` | `false` when no epic could be read at all — no mapping, or every mapping inaccessible. This is what makes the child count render `unknown` instead of a zero nobody measured, so it must never be set `true` optimistically. |
-| `scope.unobservedReason` | Why, in a phrase, when `observed` is `false`. |
+| `scope.unobservedKind` | One of `no-mapping`, `access-denied`, `not-found`, `unreadable` when `observed` is `false`. Everything a report says about an unobserved run is derived from it. A snapshot written before this field existed reads as `no-mapping`, which is what those runs already said. |
+| `scope.unobservedReason` | The same thing as a phrase, for display. |
 | `children[].contentHash` | Hash of the fields that constitute evidence — title, state, state reason, close date, body, and each PR's state, merge date and review state. **`updatedAt` is deliberately excluded**: a PR merging or a check flipping changes the evidence without touching the issue, and an `updatedAt` comparison would miss it. |
 | `children[].accessible` | `false` when the child could not be read this run. A child that disappears from the list is a removal; a child that stays with `accessible: false` is a loss of access, and they are different findings. |
 | `requirements[].reused` | `true` when this run carried the assessment forward rather than making it again. Provenance, not a verdict — it changes nothing a reader sees in the table. |

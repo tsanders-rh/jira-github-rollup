@@ -88,10 +88,41 @@ Exactly one of four, and say what it rests on:
 
 | Assessment | Means |
 | --- | --- |
-| Evidence found | The evidence supports the criterion. State precisely what it establishes. |
-| Partial evidence | Covers part of the criterion. Name what is still unverified. |
+| Evidence found | **Every** checkable clause of the criterion is supported by evidence you read, and no clause is undecided. State what establishes each. |
+| Partial evidence | Some clauses are supported and some are not. Name the ones that are not. |
 | No evidence found | The sources inspected do not establish coverage. |
 | Unable to assess | An access failure, truncated results, a criterion with no checkable clause at all, or a missing upstream mapping blocked assessment. Say which. |
+
+### `Evidence found` is a claim about the whole criterion
+
+Most criteria are conjunctions — "routed to the pool for that tier **and**
+rejected above the tier quota" is two commitments in one sentence, and a PR
+that lands the routing establishes nothing about the rejection. The failure
+this guards against is specific and common: evidence that the *work exists* is
+read as evidence that *every clause holds*.
+
+So before assessing `Evidence found`, split the criterion into clauses and ask
+of each one what you actually read:
+
+| Clause state | Goes in | Effect |
+| --- | --- | --- |
+| Supported by evidence you read | nothing; cite it in `coverageDetail` | — |
+| Checkable, but nothing you read supports it | `uncoveredClauses` | blocks `Evidence found` |
+| Not checkable yet — a TBD, an unset parameter, an open decision | `unresolvedClauses` | blocks `Evidence found` |
+
+A criterion with either list non-empty is `Partial evidence` when some clauses
+are supported, and `No evidence found` when none are. The assembler **refuses**
+`Evidence found` with a clause open rather than quietly downgrading it: the
+downgrade would produce the right count beside a `coverageDetail` still written
+as though the whole criterion were established, which is the worse of the two
+errors.
+
+Name clauses the way the reader can act on them — "nothing in the traversed set
+establishes rejection above the tier quota", not "partially covered".
+
+One clause, nothing open: `uncoveredClauses` and `unresolvedClauses` are both
+`[]` and `Evidence found` is exactly right. This is a stricter standard, not a
+prohibition.
 
 **The two columns answer different questions and must not be collapsed.** Work
 in flight raises the state without moving the assessment: a criterion whose only
@@ -120,9 +151,11 @@ for access failures or truncated retrieval, and for a missing upstream mapping.
 Discarding the checkable half because one number is undecided throws away the
 part of the assessment that was free to make.
 
-With no mapping, every row reads `Unable to assess — upstream mapping missing`,
-the same wording throughout, and a criterion with an unresolved clause still
-names that clause in the Gap column: it is a separate ask of a separate person.
+When nothing upstream was observed, every row reads `Unable to assess` with the
+same Gap throughout — and that Gap depends on why: a missing link and a refused
+credential are different asks of different people. A criterion with an
+unresolved clause still names that clause in the Gap column: it is a separate
+ask again.
 
 ### Evidence rules, in force for every row
 
@@ -203,10 +236,15 @@ One object per requirement in `diff.json`'s `reassess` list. `id` and
     ],
     "gap": "Downstream qualification pending; see below",
     "downstream": {"state": "pending", "detail": "implementation merged to main on 2026-09-18; no downstream build inspected"},
-    "unresolvedClauses": []
+    "unresolvedClauses": [],
+    "uncoveredClauses": []
   }
 ]
 ```
+
+Both clause lists default to `[]`. Omitting them asserts that every clause of
+the criterion is supported and settled, so leave them out only when that is
+what you mean.
 
 `at` is load-bearing: the trend section classifies a changed assessment as
 implementation progress, newly discovered evidence, or undetermined by comparing
@@ -215,4 +253,14 @@ produces `undetermined`, which is the honest answer — do not supply a plausibl
 date to avoid it.
 
 The assembler rejects `Evidence found` or `Partial evidence` with an empty
-`evidence` list, and rejects any assessment string outside the four above.
+`evidence` list, rejects any assessment string outside the four above, and
+rejects `Evidence found` carrying a non-empty `unresolvedClauses` or
+`uncoveredClauses`.
+
+### Downstream `pending` is re-checked every run
+
+A stored `pending` is never reused. Downstream artifacts are outside the
+traversal, so no content hash can ever contradict one, and carrying it forward
+would republish "qualification outstanding" indefinitely after anyone last
+looked. `unknown` *is* reusable — nobody looked then, nobody looked now, and
+saying so again is still true.

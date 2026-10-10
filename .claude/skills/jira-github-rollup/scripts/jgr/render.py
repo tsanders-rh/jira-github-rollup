@@ -16,6 +16,7 @@ from __future__ import annotations
 from . import links as links_mod
 from . import metrics as metrics_mod
 from . import outcomes as outcomes_mod
+from . import scope as scope_mod
 from . import util
 
 TYPE_LABEL = {
@@ -155,7 +156,7 @@ def criterion_label(requirement, site=None):
 def derive_status(assembly, computed):
     manifest = assembly["manifest"]
     if not manifest.get("observed", bool(manifest.get("epics"))):
-        return "Unknown " + EMDASH + " upstream mapping missing"
+        return "Unknown " + EMDASH + " " + scope_mod.status(manifest.get("unobservedKind"))
     if assembly.get("blocked"):
         return "Blocked"
 
@@ -343,6 +344,7 @@ def coverage_section(assembly, computed, tallied=None):
         for requirement in requirements
         if requirement.get("assessment") == "Evidence found"
         and not requirement.get("unresolvedClauses")
+        and not requirement.get("uncoveredClauses")
         and ((requirement.get("downstream") or {}).get("state") == "confirmed")
     ]
     collapse = len(requirements) > 12 and len(collapsible) > 1
@@ -420,13 +422,33 @@ def dependencies_section(assembly):
     key = (assembly.get("jira") or {}).get("key")
     lines = []
 
+    def _clause_text(clause):
+        """A clause, terminated, so the sentence after it does not run on.
+
+        The model writes these as fragments as often as sentences, and both
+        are reasonable; only the renderer knows another sentence follows.
+        """
+        text = (clause if isinstance(clause, str) else (clause or {}).get("text", "")).strip()
+        return text if text.endswith((".", "!", "?", ";", ":")) else text + "."
+
     decisions = [r for r in requirements if r.get("unresolvedClauses")]
     for requirement in decisions:
         for clause in requirement["unresolvedClauses"]:
-            text = clause if isinstance(clause, str) else (clause or {}).get("text", "")
             lines.append(
-                f"- **Decision needed** {EMDASH} {criterion_label(requirement, site)}: {text} "
+                f"- **Decision needed** {EMDASH} {criterion_label(requirement, site)}: "
+                f"{_clause_text(clause)} "
                 "Until it is recorded, this clause is unassessable rather than unmet."
+            )
+
+    # A clause nobody has evidence for is a different ask from a clause nobody
+    # has decided: this one needs engineering or a link, not a product call.
+    # Listed separately so the reader sends it to the right person.
+    for requirement in [r for r in requirements if r.get("uncoveredClauses")]:
+        for clause in requirement["uncoveredClauses"]:
+            lines.append(
+                f"- **Clause not covered** {EMDASH} {criterion_label(requirement, site)}: "
+                f"{_clause_text(clause)} The rest of the criterion may hold; this part "
+                "is not established by anything inspected."
             )
 
     unowned = [
@@ -546,16 +568,13 @@ def bullet_section(title, items):
 
 def needed_section(assembly):
     key = assembly["jira"]["key"]
+    manifest = assembly.get("manifest") or {}
+    kind = manifest.get("unobservedKind")
+    refs = [epic["ref"] for epic in manifest.get("epics") or [] if epic.get("ref")]
     return [
         "#### What is needed to complete this assessment",
         "",
-        f"- The GitHub epic issue URL for this requirement, recorded on {key} in an",
-        "  `Upstream Development` description section or as a web link labelled",
-        "  `Upstream epic`. Several URLs if the requirement spans more than one epic.",
-        "- Alternatively, the URL supplied directly in the request.",
-        "- Nothing else is blocking: the requirements were read successfully and will be",
-        "  assessed against whatever epic is supplied.",
-    ]
+    ] + scope_mod.needed(kind, key, refs)
 
 
 # --- trend ---------------------------------------------------------------

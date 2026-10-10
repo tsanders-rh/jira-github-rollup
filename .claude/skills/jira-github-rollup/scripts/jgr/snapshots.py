@@ -217,9 +217,22 @@ def build(jira, mappings, manifest, requirements, baseline_info, generated_at=No
             "sourceIssues": jira.get("sourceIssues") or [jira["key"]],
             "children": children,
             "otherInspected": [d["ref"] for d in manifest.get("dependencies") or []],
+            # The same dependencies with the state they were in. `otherInspected`
+            # records only that they were looked at, which is enough to list them
+            # and not enough to notice one closing between runs.
+            "dependencies": [
+                {
+                    "ref": dependency["ref"],
+                    "state": dependency.get("state"),
+                    "stateReason": dependency.get("stateReason"),
+                    "accessible": dependency.get("accessible"),
+                }
+                for dependency in manifest.get("dependencies") or []
+            ],
             "traversalComplete": bool(manifest.get("traversalComplete")),
             "traversalNotes": manifest.get("traversalNotes") or None,
             "observed": manifest.get("observed", bool(manifest.get("epics"))),
+            "unobservedKind": manifest.get("unobservedKind"),
             "unobservedReason": manifest.get("unobservedReason"),
         },
         "access": manifest.get("access") or [],

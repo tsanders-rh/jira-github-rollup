@@ -63,6 +63,14 @@ what shipped, and they are never turned into a percentage of a feature.
 A criterion nobody linked work to is unverified with a tracking clarification —
 not unmet, and not a finding about whether the work exists.
 
+`met` is held to its definition rather than trusted to it. "Every clause
+supported" is checked: a requirement carrying `uncoveredClauses` (checkable,
+nothing supports it) or `unresolvedClauses` (nobody has decided it) cannot be
+`Evidence found`, and `assemble` refuses the run rather than downgrading the
+count behind a detail cell that still reads as fully established. Those two
+lists stay separate in the output — one needs engineering or a link, the other
+needs a product decision.
+
 ### Delivery confidence
 
 A judgement line, **not** a function of the counts. `outcomes.confidence()`
@@ -92,7 +100,7 @@ posted.
 ````markdown
 ### Upstream Development Rollup
 
-**Status:** <Not started | In progress | Blocked | Complete | Unknown — upstream mapping missing>
+**Status:** <Not started | In progress | Blocked | Complete | Unknown — ‹why nothing was observed›>
 **Source epic:** [org/repo#N](https://github.com/org/repo/issues/N) — <epic title>
 **Generated:** <YYYY-MM-DD>
 
@@ -231,11 +239,11 @@ _Upstream evidence assessment, not release completion. 3 criteria in total._
   downstream qualification was not inspected for AC1.
 - Attention needed: no upstream work in the traversed set is linked to
   RHOAIENG-1234 SC6 — identify and link the work covering SC6; a decision is
-  open on SC4.
+  open on SC4 — the retention window is given as TBD.
 - Next: link the owning issue or epic for SC6; record the open decision on SC4.
   No owner or date for these is recorded in the sources inspected.
 
-Trend: since the published snapshot of 2026-10-01, outcomes met 1→3,
+Trend: since the last update posted here on 2026-10-01, outcomes met 1→3,
 unverified 4→2.
 
 Scope: 2 nested epics were recorded but not traversed. Criteria owned by that
@@ -254,6 +262,17 @@ The rules, all enforced in `summary.py`:
   different document, not a shorter one.
 - **Four bullets, fixed order and fixed labels.** Progress, Remaining,
   Attention needed, Next.
+- **Every "Attention needed" item carries a criterion, a pointer and an
+  action.** "A decision is open on SC4" sends the reader away to find out
+  which; the clause itself is named. A `confirmed-unmet` criterion appears
+  here, with what refutes it — never in Remaining, where "tracked and
+  incomplete" would file a thing found to be wrong alongside work still in
+  flight.
+- **The trend names its baseline in the reader's terms** — "the last update
+  posted here on <date>", or "the last assessment on <date>, which was not
+  posted here". Movement since the last comment and movement since the last
+  time anyone looked are different claims, and "draft snapshot" is this tool's
+  vocabulary, not a Jira reader's.
 - **1–2 targeted links per bullet**, with descriptive labels (`PR example-gateway#1605`, not
   a bare URL and not "click here"). The full inventory stays in the detailed
   assessment.
@@ -364,8 +383,10 @@ Rules specific to this shape:
 - **No Risks and blockers section** unless the risk is evidenced from the Jira
   alone. "No upstream link is recorded" is a tracking gap, and it is already the
   headline — do not restate it as a delivery risk.
-- Every Coverage cell is `Unable to assess — upstream mapping missing`, the same
-  wording in every row. Not `No evidence found`, which claims a search happened.
+- Every Coverage cell is `Unable to assess`, the same wording in every row, with
+  the same Gap in every row. Not `No evidence found`, which claims a search
+  happened. The Gap names the action the specific failure calls for — add the
+  link, or get read access to the link already there.
 - Nothing is asserted about the state of the work. "Not started", "not
   implemented", "no progress", "behind", and "at risk" are all claims you have
   no basis for. Naming them as possibilities you cannot distinguish between —
@@ -386,9 +407,9 @@ Rules specific to this shape:
 **Status** — derived from the evidence table in `SKILL.md` step 7. `Blocked`
 requires a named blocker in the Risks section; do not use it loosely. `Complete`
 additionally requires every requirement at `Evidence found` with no downstream
-qualification outstanding. `Unknown — upstream mapping missing` is the only
-value permitted when no epic was found, and it is never softened to `Not
-started`.
+qualification outstanding. When nothing upstream was observed the status is
+`Unknown`, qualified by the reason (`references/pipeline.md` has the four), and
+it is never softened to `Not started`.
 
 **Source epic** — list **every** epic in scope, one per line, each with its
 title. This is what makes the rollup auditable, and with multiple epics it is

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import re
 
+from . import scope
 from . import util
 from .cache import Cache
 from .ghclient import Gh
@@ -114,18 +115,26 @@ class Collector:
         return found
 
     def _sub_issues(self, repo, number):
+        return self._sub_issue_refs(repo, number)[0]
+
+    def _sub_issue_refs(self, repo, number):
+        """`(refs, answered)`. `answered` is False when GitHub could not say.
+
+        A repo without the sub-issues feature 404s on this endpoint. That is
+        not an access failure for the repository itself, so it is only recorded
+        when the epic body also failed to load - but it is also not an answer
+        of zero, and callers that classify on the count must not read it as
+        one.
+        """
         result = self.gh.sub_issues(repo, number)
         if not result.ok:
-            # A repo without the sub-issues feature 404s on this endpoint. That
-            # is not an access failure for the repository itself, so it is only
-            # recorded when the epic body also failed to load.
-            return []
+            return [], False
         refs = []
         for item in result.data or []:
             url = item.get("repository_url") or ""
             owner_repo = "/".join(url.split("/")[-2:]) if url else repo
             refs.append(f"{owner_repo}#{item.get('number')}")
-        return refs
+        return refs, True
 
     def _timeline_refs(self, repo, number):
         """Issues and PRs cross-referenced from an issue's timeline."""
@@ -189,6 +198,33 @@ class Collector:
                 ordered.append(pr_ref)
         return ordered
 
+    # --- classification -------------------------------------------------
+
+    def _nested_via(self, child_ref, repo, number, data, epic_refs):
+        """How this child was judged a nested epic, or None if it is a leaf.
+
+        Counting issue references in the body was the original test and it is
+        wrong in the common direction: a leaf issue that names its own parent
+        and a sibling scores two and gets reported as untraversed work. Every
+        such false positive subtracts from what the report claims to have
+        covered, so the error shows up as an overstated gap.
+
+        GitHub's own sub-issue list is the answer where there is one. The body
+        is the fallback for repos that 404 the endpoint, and there it has to
+        drop references that point up - the issue itself, and the epics being
+        traversed - before counting.
+        """
+        if _epic_label(data.get("labels")):
+            return "label"
+        sub_refs, answered = self._sub_issue_refs(repo, number)
+        if answered:
+            return "sub-issues" if len(sub_refs) >= 2 else None
+        upward = {child_ref} | set(epic_refs)
+        body_refs = {
+            ref for ref in self._children_from_body(repo, data.get("body")) if ref not in upward
+        }
+        return "body-references" if len(body_refs) >= 2 else None
+
     # --- stages ---------------------------------------------------------
 
     def inventory(self, epics):
@@ -251,6 +287,8 @@ class Collector:
                 if ref not in record["epics"]:
                     record["epics"].append(ref)
 
+        epic_refs = {entry["ref"] for entry in epic_entries}
+
         child_entries = []
         for child_ref, record in sorted(children.items()):
             data = self._issue(child_ref, "child issue")
@@ -267,6 +305,7 @@ class Collector:
                 "url": None,
                 "crossRepo": child_ref.split("#")[0] not in {e.split("#")[0] for e in record["epics"]},
                 "nested": False,
+                "nestedVia": None,
                 "bodyPath": None,
                 "bodyHash": None,
                 "prs": [],
@@ -291,9 +330,11 @@ class Collector:
                     "bodyHash": util.sha256(body),
                 }
             )
-            child_repo, _ = split_ref(child_ref)
-            if _epic_label(data.get("labels")) or len(self._children_from_body(child_repo, body)) >= 2:
+            child_repo, child_number = split_ref(child_ref)
+            nested_via = self._nested_via(child_ref, child_repo, child_number, data, epic_refs)
+            if nested_via:
                 entry["nested"] = True
+                entry["nestedVia"] = nested_via
                 self.notes.append(
                     f"{child_ref} looks like a nested epic; it was recorded but not traversed."
                 )
@@ -454,7 +495,12 @@ class Collector:
         manifest["collectedAt"] = util.iso(util.utcnow())
         manifest["access"] = self._access_list(manifest.get("access"))
         manifest["traversalComplete"] = manifest["traversalComplete"] and self.complete
-        manifest["traversalNotes"] = (manifest.get("traversalNotes") or []) + self.notes
+        # The evidence stage may run on the same collector that did the
+        # inventory, whose notes are already in the manifest. Appending them
+        # again doubles every "nested epic" line, and the Jira summary counts
+        # those lines to say how much was not traversed.
+        existing = manifest.get("traversalNotes") or []
+        manifest["traversalNotes"] = existing + [n for n in self.notes if n not in existing]
         manifest["inventoryHash"] = _inventory_hash(manifest)
         return manifest
 
@@ -463,7 +509,30 @@ class Collector:
         merged.update(self.access)
         return sorted(merged.values(), key=lambda entry: entry["ref"])
 
+    def _unobserved_kind(self, epics):
+        """Why no epic was read: no link, refused, gone, or simply failed.
+
+        These have different owners. Collapsing them into "mapping missing"
+        tells someone to add a link that is already there, and makes a 403
+        indistinguishable from work nobody has tracked.
+        """
+        if not epics:
+            return scope.NO_MAPPING
+        statuses = set()
+        for epic in epics:
+            ref = epic["ref"]
+            # `_fail` files repo-level failures under the repo, not the ref.
+            entry = self.access.get(ref.split("#")[0]) or self.access.get(ref) or {}
+            statuses.add(entry.get("status") or "error")
+        if statuses == {"forbidden"}:
+            return scope.ACCESS_DENIED
+        if statuses == {"unreadable"}:
+            return scope.NOT_FOUND
+        return scope.UNREADABLE
+
     def _manifest(self, epics, children, dependencies, stage):
+        observed = any(epic["accessible"] for epic in epics)
+        kind = None if observed else self._unobserved_kind(epics)
         manifest = {
             "jiraKey": self.jira_key,
             "collectedAt": util.iso(util.utcnow()),
@@ -478,10 +547,9 @@ class Collector:
             # True whenever at least one epic was read. An epic that 404s
             # leaves nothing observed, and the child count must then be
             # `unknown` rather than a zero nobody counted.
-            "observed": any(epic["accessible"] for epic in epics),
-            "unobservedReason": None
-            if any(epic["accessible"] for epic in epics)
-            else "no linked epic could be read",
+            "observed": observed,
+            "unobservedKind": kind,
+            "unobservedReason": None if observed else scope.reason(kind),
             "ghCalls": len(self.gh.calls),
         }
         manifest["inventoryHash"] = _inventory_hash(manifest)
@@ -498,13 +566,14 @@ def _inventory_hash(manifest):
     )
 
 
-def empty_manifest(jira_key, reason="no upstream mapping recorded on the Jira issue"):
+def empty_manifest(jira_key, reason=None, kind=scope.NO_MAPPING):
     """What the pipeline carries when there is no epic to traverse.
 
     `observed: False` is the load-bearing field. It is what makes the child
     count render `unknown` rather than `0/0`, which would be a claim that a
     measurement happened.
     """
+    reason = reason or scope.reason(kind)
     return {
         "jiraKey": jira_key,
         "collectedAt": util.iso(util.utcnow()),
@@ -517,6 +586,7 @@ def empty_manifest(jira_key, reason="no upstream mapping recorded on the Jira is
         "traversalComplete": False,
         "traversalNotes": [reason],
         "observed": False,
+        "unobservedKind": kind,
         "unobservedReason": reason,
         "inventoryHash": util.sha256({"empty": reason}),
         "ghCalls": 0,

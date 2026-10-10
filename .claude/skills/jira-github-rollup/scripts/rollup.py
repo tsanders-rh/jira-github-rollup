@@ -230,6 +230,7 @@ def cmd_rerender(args):
             "traversalComplete": scope.get("traversalComplete", True),
             "traversalNotes": scope.get("traversalNotes") or [],
             "observed": scope.get("observed", True),
+            "unobservedKind": scope.get("unobservedKind"),
             "unobservedReason": scope.get("unobservedReason"),
             "collectedAt": (snapshot.get("inventory") or {}).get("collectedAt"),
             "stage": (snapshot.get("inventory") or {}).get("stage"),

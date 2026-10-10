@@ -42,8 +42,23 @@ so you rarely need to join them by hand.
 The two directories have opposite rules on purpose. The **cache** holds raw
 responses, is overwritten freely, and may be deleted at any time — it is how
 raw payloads stay out of the conversation. The **snapshot store** is the record
-of what each run found and is append-only, because the Jira comment may be
-edited in place and the comparison baseline must survive that.
+of what each run found, and it must survive the Jira comment being edited in
+place, because that comment is not a reliable baseline.
+
+"Append-only" is precise about one thing and loose about another, so here is
+the exact rule. **No run ever reads, rewrites or deletes another run's
+snapshot** — it writes a new dated file and nothing else. **The assessment
+payload is immutable once written**: `jira`, `mappings`, `scope`, `access`,
+`outcomes`, `requirements` and `inventory` are never modified after the run
+that produced them.
+
+`promote` is the single exception, and it is additive. On a successful post it
+sets `publication`, `publishedAt`, `jiraCommentId` and `published` on one
+snapshot, and renames `-draft.json` to `-published.json`. It touches no
+requirement, no assessment, no evidence item and no count — what was judged
+stays exactly as judged, and only the record of *whether it was published*
+changes. That separation is the point: publication is a fact about a Jira
+comment, not about the assessment.
 
 Collection does not read the cache by default: change detection depends on this
 run actually asking GitHub. `--offline` reuses what is cached, for re-rendering
@@ -102,12 +117,42 @@ python3 rollup.py collect --key <KEY> --epics refs.json --stage evidence \
 list produces the empty manifest — `observed: false`, which is what makes the
 child count render `unknown` rather than a zero nobody measured.
 
-Children are discovered by union of native sub-issues, task-list references in
-the epic body (`- [ ] org/repo#123` and full URLs), and timeline
-cross-references, deduplicated across epics with every originating epic
-retained. Cross-repo children keep their own repo; `crossRepo` marks them. A
-child that looks like an epic itself is marked `nested` and recorded, not
-traversed.
+Children are discovered by union of three relations, deduplicated across epics
+with every originating epic retained. They are not equally strong, and
+`discoveredVia` records which one found each child:
+
+| Relation | How it is found | What it establishes |
+| --- | --- | --- |
+| `sub-issue` | the native GitHub sub-issue relation | A declared parent-child link |
+| `task-list` | `- [ ] org/repo#123` or a full issue URL in the epic body | The epic author listed it as part of the work |
+| `timeline-cross-reference` | `cross-referenced` and `connected` events on the epic | **Only that something mentioned the epic** |
+
+The third is deliberately inclusive and will pull in loosely related issues — a
+"see also", a duplicate, a discussion that linked the epic once. The bias is
+toward over-collection: a child wrongly included costs a row a reader dismisses,
+while a child wrongly excluded becomes "no evidence found" for a criterion that
+was in fact covered. When an assessment rests on a timeline-only child, weigh
+it accordingly and say what the relation was.
+
+**Dependencies are a different relation, not a weak child.** `depends on`,
+`blocked by` or `requires` followed by an issue reference, in an epic or child
+body. They are fetched for their state and never traversed.
+
+Traversal stops in three places, each recorded rather than silent: PRs are
+leaves (their cross-references are not followed), dependencies are leaves, and
+a child that looks like an epic itself is marked `nested` and recorded, not
+traversed, with `nestedVia` saying how it was judged:
+
+| `nestedVia` | Test |
+| --- | --- |
+| `label` | The child carries an `epic`, `feature` or `initiative` label |
+| `sub-issues` | GitHub reports two or more native sub-issues under it |
+| `body-references` | Fallback, only where the sub-issues endpoint 404s: two or more issue references in the body, after dropping the child itself and the epics being traversed |
+
+The fallback drops upward references because a leaf that names its parent and a
+sibling is not a parent. Each false positive subtracts from what the report
+claims to have covered, so the error reads as a gap that is not there. Judging
+on the native sub-issue list costs one `gh` request per unlabelled child.
 
 `stateReason` is recorded in four buckets and never normalized:
 
@@ -136,7 +181,7 @@ python3 rollup.py diff --manifest manifest.json --requirements requirements.json
 Returns `baseline`, `reassess`, `reuse`, `requirementChanges` (added, removed,
 textChanged, ambiguous, renumbered), `inventoryChanges` (artifactsAdded,
 artifactsRemoved, contentChanged, hashesUnavailable, reopened, accessLost,
-accessRestored), `mappingChanged`, and `matchedPairs`.
+accessRestored, dependenciesChanged), `mappingChanged`, and `matchedPairs`.
 
 A requirement is reassessed when any of these hold:
 
@@ -146,6 +191,12 @@ A requirement is reassessed when any of these hold:
   or changed access;
 - it was not previously `Evidence found` and anything upstream changed — a
   requirement with no coverage is exactly the one a new artifact might cover;
+- a declared dependency it rests on changed state, was added, was removed, or
+  changed readability;
+- its stored downstream state is `pending`. Downstream artifacts are outside
+  the traversal, so no hash here can ever contradict one; reusing it would
+  republish "qualification outstanding" long after anyone checked. `unknown` is
+  reusable — nobody looked then, nobody looked now;
 - the baseline carries no assessment for it, or carries no content hashes
   (schema v1) to verify reuse against;
 - the mapping changed, the rules version changed, a full refresh was asked for,
@@ -201,18 +252,35 @@ and link the work covering SC6", not a claim about an epic nobody traversed.
 `result.json` carries `outcomes` (the four counts), `deliveryConfidence`,
 `summaryWords`, `snapshotPath`, the three ratios, and `reused`/`assessed`.
 
-Three ways this command refuses rather than emitting something wrong:
+Four ways this command refuses rather than emitting something wrong:
 
 - A requirement with no fresh and no reusable assessment. It will not invent one.
+- An `Evidence found` carrying a non-empty `unresolvedClauses` or
+  `uncoveredClauses`. `Evidence found` claims every clause of the criterion
+  holds; an open clause makes it `Partial evidence`.
 - A `confirmed-unmet` declared without `refutingEvidence`, or declared on an
   assessment other than `No evidence found`. Absence of evidence is `unverified`.
 - A disagreement between the two outputs — the outcome row missing from either,
   counts that do not sum to the criteria total, or a local path in the summary.
 
-The status line is derived, not supplied: `Unknown — upstream mapping missing`
-when nothing was observed, `Complete` only when every requirement is `Evidence
-found`, no downstream step is outstanding, and every child is closed.
+The status line is derived, not supplied. `Complete` requires every requirement
+at `Evidence found`, no downstream step outstanding, and every child closed.
 `blocked: true` is the one override, for evidenced blockage.
+
+When nothing was observed the status names **why**, from the manifest's
+`unobservedKind`. "No link was recorded" and "the link is there and we were
+refused" have different owners, and reporting the second as a missing mapping
+sends someone to fix a link that is already correct:
+
+| `unobservedKind` | Status | What it asks for |
+| --- | --- | --- |
+| `no-mapping` | `Unknown — upstream mapping missing` | The epic URL, recorded on the Jira issue |
+| `access-denied` | `Unknown — upstream access denied` | Read access for the credential `gh` runs under |
+| `not-found` | `Unknown — upstream epic not found` | A corrected link; the one recorded resolves to nothing |
+| `unreadable` | `Unknown — upstream epic unreadable` | A re-run, once the cause of the failure is known |
+
+The wording for each kind — status, `unobservedReason`, the Gap column, and the
+"What is needed" bullets — lives in `jgr/scope.py` and nowhere else.
 
 ### `rerender`
 
@@ -308,6 +376,7 @@ rules changed, when a previous run was wrong, or when the user asks for one.
 | `diff` reports `hashesUnavailable` | A schema v1 baseline | Everything is reassessed this run. Expected once per issue after the upgrade |
 | `assemble` errors `no assessment supplied or reusable` | A requirement has no verdict | Assess it. The assembler will not invent one |
 | `assemble` errors on an assessment string | Not one of the four | Use the exact wording from `references/requirements.md` |
+| `assemble` errors `claims every clause of the criterion holds` | `Evidence found` with a clause left open | Assess it `Partial evidence` and keep the clause listed. Do not empty the list to get past the error — the list is the finding |
 | `assemble` errors `confirmed-unmet declared with nothing cited` | Absence was reported as refutation | Drop the `outcome` field. Absence of evidence is `unverified`, and the count is the same either way |
 | `assemble` errors `the Jira summary does not carry the outcome row` | The two renderings disagree | A renderer bug, not a data problem. Do not hand-edit either output to agree |
 | `assemble` errors `contains paths a reader cannot follow` | A local path reached the summary | Usually a `--full-assessment-url` pointing at `/tmp` or `~`. Omit it unless the URL is durable |

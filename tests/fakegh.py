@@ -16,6 +16,11 @@ The world file is a dict of:
     searchPrs   {"org/repo#2": [...]}
     missing     ["org/repo#3", "org/other"]   -> 404
     forbidden   ["org/private"]               -> 403
+    noSubIssues ["org/legacy"]                -> 404 on /sub_issues only
+
+`noSubIssues` is the repo that has never had GitHub's sub-issue feature. It
+404s that one endpoint while reading normally, which is the case where "no
+sub-issues" and "we cannot tell" have to stay distinguishable.
 """
 
 import json
@@ -103,6 +108,8 @@ def main(argv):
         if problem:
             fail(problem)
         if kind == "sub_issues":
+            if repo in data.get("noSubIssues", []):
+                fail("HTTP 404: Not Found (sub-issues unavailable)")
             refs = data.get("subIssues", {}).get(ref, [])
             emit(
                 [

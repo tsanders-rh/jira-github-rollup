@@ -62,6 +62,21 @@ def evidence_links(requirement, limit=2, supporting=None):
     ]
 
 
+def refuting_links(requirement, limit=2):
+    """What a `confirmed-unmet` claim points at: the thing that refutes it.
+
+    `refutingEvidence` first, because that is the artifact the claim was made
+    on. Falling back to `evidence` rather than going silent - the assembler
+    accepts either as the citation, so the summary has to render either.
+    """
+    items = requirement.get("refutingEvidence") or requirement.get("evidence") or []
+    return [
+        links_mod.describe(item.get("ref"), item.get("kind"))
+        for item in items[:limit]
+        if item.get("ref")
+    ]
+
+
 def _id_key(requirement):
     """Sort SC9 before SC10, and keep criteria from one Jira together."""
     text = str(requirement.get("id") or "")
@@ -116,10 +131,10 @@ class _Budget:
     def __init__(self, limit=LINKS_PER_BULLET):
         self.left = limit
 
-    def spend(self, requirement):
+    def spend(self, requirement, refuting=False):
         if self.left <= 0:
             return ""
-        pointers = evidence_links(requirement, 1)
+        pointers = refuting_links(requirement, 1) if refuting else evidence_links(requirement, 1)
         if not pointers:
             return ""
         self.left -= 1
@@ -154,10 +169,15 @@ def _progress(grouped, site, cap):
 
 
 def _remaining(grouped, site, cap):
-    """Implementation or qualification work that is identified and outstanding."""
-    tracked = _ordered(
-        [r for r in grouped["unverified"] + grouped["confirmed-unmet"] if r.get("evidence")]
-    )
+    """Implementation or qualification work that is identified and outstanding.
+
+    `confirmed-unmet` is deliberately not here. "Tracked and incomplete" is the
+    right sentence for work still in flight and the wrong one for a criterion
+    something was found to violate; it reads as a schedule item rather than a
+    finding. Those go to Attention needed, which is where a reader looks for
+    things that change a decision.
+    """
+    tracked = _ordered([r for r in grouped["unverified"] if r.get("evidence")])
     pending_downstream = _ordered(
         [
             r
@@ -181,12 +201,39 @@ def _remaining(grouped, site, cap):
     return "Remaining: " + "; ".join(parts) + "."
 
 
+def _clause_phrase(requirement):
+    """The open decision itself, not the fact that one exists.
+
+    "A decision is open on SC3" sends the reader back to the full assessment to
+    find out which. Naming the clause is the difference between an item they
+    can act on and an item they have to research first.
+    """
+    clauses = [str(c).strip() for c in requirement.get("unresolvedClauses") or [] if str(c).strip()]
+    if not clauses:
+        return ""
+    first = clauses[0]
+    if len(first) > 90:
+        first = first[:89].rsplit(" ", 1)[0] + "…"
+    return f" — {first}" + (f" (and {len(clauses) - 1} more)" if len(clauses) > 1 else "")
+
+
 def _attention(grouped, requirements, site, cap):
-    """Decisions, blockers, and tracking clarifications - each with a pointer."""
+    """Findings, decisions and tracking gaps - each with a criterion, a link, an action."""
+    refuted = _ordered(grouped["confirmed-unmet"])
     untracked = _ordered([r for r in grouped["unverified"] if not r.get("evidence")])
     decisions = _ordered([r for r in requirements or [] if r.get("unresolvedClauses")])
 
     budget, parts = _Budget(), []
+    # First, because it is the only item here that reports something found to be
+    # wrong rather than something not yet done.
+    for requirement in refuted[:cap]:
+        parts.append(
+            f"evidence shows {criterion_ref(requirement, site)} is not satisfied"
+            f"{budget.spend(requirement, refuting=True)} — decide whether to reopen the "
+            "work or revise the criterion"
+        )
+    if len(refuted) > cap:
+        parts[-1] += _and_others(cap, len(refuted))
     if untracked:
         # The wording the brief asks for, and the only one that is true: this
         # is a request to find the owner, not a claim that there is none.
@@ -199,7 +246,7 @@ def _attention(grouped, requirements, site, cap):
     for requirement in decisions[:cap]:
         parts.append(
             f"a decision is open on {criterion_ref(requirement, site)}"
-            f"{budget.spend(requirement)}"
+            f"{_clause_phrase(requirement)}{budget.spend(requirement)}"
         )
     if len(decisions) > cap:
         parts[-1] += _and_others(cap, len(decisions))
@@ -220,6 +267,10 @@ def _next(grouped, requirements, site, cap):
         ]
     )
     actions = []
+    if grouped["confirmed-unmet"]:
+        actions.append(
+            "reopen or re-scope " + _ids(_ordered(grouped["confirmed-unmet"]))
+        )
     if untracked:
         actions.append("link the owning issue or epic for " + _ids(untracked))
     if decisions:
@@ -250,7 +301,14 @@ def trend_line(assembly, tallied):
 
     before = outcomes_mod.tally(snapshot["requirements"])
     when = util.date_only(baseline.get("generatedAt"))
-    kind = "published" if baseline.get("publication") == "published" else "draft"
+    # "Draft snapshot" is this tool's vocabulary, not the reader's, and the two
+    # baselines answer different questions: movement since the last thing posted
+    # here, or movement since the last time anyone assessed. Say which.
+    kind = (
+        f"last update posted here on {when}"
+        if baseline.get("publication") == "published"
+        else f"last assessment on {when}, which was not posted here"
+    )
 
     changes = diff.get("requirementChanges") or {}
     scope_changed = bool(
@@ -265,9 +323,9 @@ def trend_line(assembly, tallied):
         if before["counts"][name] != tallied["counts"][name]
     ]
     if not moved:
-        body = f"no outcome changed since the {kind} snapshot of {when}"
+        body = f"no outcome changed since the {kind}"
     else:
-        body = f"since the {kind} snapshot of {when}, " + ", ".join(moved)
+        body = f"since the {kind}, " + ", ".join(moved)
 
     notes = []
     if before["total"] != tallied["total"]:
@@ -293,10 +351,15 @@ def _scope_caveat(manifest):
     clauses = []
     if inaccessible:
         refs = ", ".join(a.get("ref", "?") for a in inaccessible[:3])
-        clauses.append(f"{len(inaccessible)} source(s) could not be read ({refs})")
+        clauses.append(
+            f"{util.pluralize(len(inaccessible), 'source')} could not be read ({refs})"
+        )
     nested = [n for n in notes if "nested epic" in n.lower()]
     if nested:
-        clauses.append(f"{len(nested)} nested epics were recorded but not traversed")
+        clauses.append(
+            f"{util.pluralize(len(nested), 'nested epic')} "
+            f"{'was' if len(nested) == 1 else 'were'} recorded but not traversed"
+        )
     if not manifest.get("traversalComplete", True):
         clauses.append("traversal was incomplete")
     if not clauses:

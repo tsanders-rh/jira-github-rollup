@@ -21,6 +21,13 @@ So `confirmed-unmet` is never inferred. It requires the model to say so
 explicitly *and* to cite the evidence that refutes the criterion, and this
 module rejects the claim otherwise. Missing evidence stays `unverified`
 forever, however much of it is missing.
+
+`met` is guarded from the other side. A criterion is a conjunction of clauses,
+and evidence that the work *exists* is routinely mistaken for evidence that
+every clause of it holds. So `met` requires that no clause was left undecided
+(`unresolvedClauses`) and none was left unsupported (`uncoveredClauses`).
+Naming those clauses is a judgement and stays with the model; refusing to call
+the result `met` is mechanical, and lives here.
 """
 
 from __future__ import annotations
@@ -76,10 +83,19 @@ def _refutation_holds(requirement):
     return bool(requirement.get("refutingEvidence") or requirement.get("evidence"))
 
 
+def open_clauses(requirement):
+    """Clauses standing between this criterion and `met`, undecided or unsupported."""
+    return (
+        list(requirement.get("unresolvedClauses") or []),
+        list(requirement.get("uncoveredClauses") or []),
+    )
+
+
 def problems(requirements):
-    """Why a `confirmed-unmet` claim was refused. Reported, never silently dropped."""
+    """Why a claim was refused. Reported, never silently dropped."""
     found = []
     for requirement in requirements or []:
+        found.extend(_clause_problems(requirement))
         if requirement.get("outcome") is None:
             continue
         where = f"{requirement.get('id')} ({requirement.get('sourceKey')})"
@@ -103,6 +119,33 @@ def problems(requirements):
                 "evidence that the outcome is not satisfied; absence of evidence is 'unverified'"
             )
     return found
+
+
+def _clause_problems(requirement):
+    """`Evidence found` is a claim about the whole criterion, and is checked as one.
+
+    Refusing rather than quietly downgrading to `Partial evidence`: the
+    downgrade would be the safe number but the wrong row, because the detail
+    column would still read as though the criterion were fully established.
+    The model has to say which clauses are open, and then say so in the prose.
+    """
+    if requirement.get("assessment") != "Evidence found":
+        return []
+    unresolved, uncovered = open_clauses(requirement)
+    if not (unresolved or uncovered):
+        return []
+    where = f"{requirement.get('id')} ({requirement.get('sourceKey')})"
+    detail = []
+    if unresolved:
+        detail.append(f"undecided: {'; '.join(str(c) for c in unresolved)}")
+    if uncovered:
+        detail.append(f"unsupported by evidence: {'; '.join(str(c) for c in uncovered)}")
+    return [
+        f"{where}: 'Evidence found' claims every clause of the criterion holds, but "
+        + ", ".join(detail)
+        + ". Assess it 'Partial evidence' (or 'No evidence found' if nothing is "
+        "covered); a criterion with an open clause is not met"
+    ]
 
 
 def tally(requirements):

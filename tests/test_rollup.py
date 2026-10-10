@@ -35,6 +35,7 @@ from jgr import links as links_mod  # noqa: E402
 from jgr import metrics as metrics_mod  # noqa: E402
 from jgr import outcomes as outcomes_mod  # noqa: E402
 from jgr import refs as refs_mod  # noqa: E402
+from jgr import scope as scope_mod  # noqa: E402
 from jgr import snapshots as snapshots_mod  # noqa: E402
 from jgr import summary as summary_mod  # noqa: E402
 from jgr import util  # noqa: E402
@@ -258,6 +259,78 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("no change", report)
         self.assertNotIn("unchanged since", report)
 
+    def test_a_pending_downstream_is_never_reused(self):
+        """Nothing upstream can contradict it, so reuse would republish it forever.
+
+        Downstream qualification is outside the traversal: no content hash this
+        differ computes covers it. A `pending` carried forward unchanged is a
+        months-old "qualification outstanding" reported as if it were current.
+        """
+        self.run_once(
+            REQUIREMENTS,
+            [
+                assessment("AC1", "Evidence found",
+                           [{"ref": PR_A, "kind": "pr", "state": "merged",
+                             "at": "2026-09-18T09:00:00Z"}], "merged", "pending"),
+                assessment("AC2", "Evidence found",
+                           [{"ref": PR_B, "kind": "pr", "state": "merged",
+                             "at": "2026-09-18T09:00:00Z"}], "merged", "confirmed"),
+            ],
+            generated_at="2026-10-01T00:00:00Z",
+        )
+        plan = self.plan(self.collect(), REQUIREMENTS)
+        self.assertEqual([entry["id"] for entry in plan["reassess"]], ["AC1"])
+        self.assertIn("downstream qualification was outstanding", plan["reassess"][0]["reason"])
+        self.assertEqual([entry["id"] for entry in plan["reuse"]], ["AC2"])
+
+    def test_an_unknown_downstream_is_still_reusable(self):
+        """Nobody looked then and nobody looked now; repeating that is honest."""
+        self.run_once(
+            REQUIREMENTS,
+            [
+                assessment("AC1", "Evidence found",
+                           [{"ref": PR_A, "kind": "pr", "state": "merged",
+                             "at": "2026-09-18T09:00:00Z"}], "merged", "unknown"),
+                assessment("AC2", "Evidence found",
+                           [{"ref": PR_B, "kind": "pr", "state": "merged",
+                             "at": "2026-09-18T09:00:00Z"}], "merged", "unknown"),
+            ],
+            generated_at="2026-10-01T00:00:00Z",
+        )
+        plan = self.plan(self.collect(), REQUIREMENTS)
+        self.assertEqual(plan["reassess"], [])
+
+    def test_a_dependency_closing_between_runs_invalidates_what_rests_on_it(self):
+        """A declared dependency is inspected but not traversed, so it has no child hash."""
+        dependency = "example-org/example-meter#900"
+        self.world["issues"][CHILD_A]["body"] = f"Routing work. Depends on {dependency}"
+        self.world["issues"][dependency] = {
+            "title": "Meter API", "body": "", "state": "OPEN", "stateReason": "",
+            "url": f"https://github.com/{dependency.replace('#', '/issues/')}",
+            "updatedAt": "2026-09-01T00:00:00Z", "closedAt": None,
+        }
+        self.run_once(
+            REQUIREMENTS,
+            [
+                assessment("AC1", "Evidence found",
+                           [{"ref": dependency, "kind": "issue", "at": "2026-09-18T09:00:00Z"}],
+                           "merged", "confirmed"),
+                assessment("AC2", "Evidence found",
+                           [{"ref": PR_B, "kind": "pr", "state": "merged",
+                             "at": "2026-09-18T09:00:00Z"}], "merged", "confirmed"),
+            ],
+            generated_at="2026-10-01T00:00:00Z",
+        )
+        self.world["issues"][dependency]["state"] = "CLOSED"
+        self.world["issues"][dependency]["stateReason"] = "COMPLETED"
+
+        plan = self.plan(self.collect(), REQUIREMENTS)
+        self.assertIn(dependency, plan["inventoryChanges"]["dependenciesChanged"])
+        # Only AC1: nothing else about the upstream tree moved, so this proves
+        # the dependency state is what invalidated it.
+        self.assertEqual([entry["id"] for entry in plan["reassess"]], ["AC1"])
+        self.assertEqual(plan["inventoryChanges"]["contentChanged"], [])
+
     def test_changed_child_body_reassesses_the_requirement_resting_on_it(self):
         requirements = list(REQUIREMENTS) + [
             {"id": "AC3", "sourceKey": KEY, "type": "AC",
@@ -452,10 +525,136 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(metrics_mod.render_ratio(computed["children"]), "unknown")
         self.assertEqual(metrics_mod.render_ratio(computed["coverage"]), "N/A")
 
+    # --- nested epics ---------------------------------------------------
+
+    def nested(self, manifest, ref):
+        return next(child for child in manifest["children"] if child["ref"] == ref)
+
+    def test_a_child_naming_its_parent_is_not_a_nested_epic(self):
+        self.world["issues"][CHILD_B] = issue(
+            CHILD_B, "Expose quota metrics", body=f"Parent {EPIC}. Related: {CHILD_A}."
+        )
+        manifest = self.collect()
+        child = self.nested(manifest, CHILD_B)
+        self.assertFalse(child["nested"], "two references in a body are not two children")
+        self.assertIsNone(child["nestedVia"])
+        self.assertEqual([n for n in manifest["traversalNotes"] if "nested epic" in n], [])
+
+    def test_a_child_with_its_own_sub_issues_is_a_nested_epic(self):
+        self.world["subIssues"][CHILD_B] = [
+            "example-org/example-quota#901",
+            "example-org/example-quota#902",
+        ]
+        manifest = self.collect()
+        child = self.nested(manifest, CHILD_B)
+        self.assertTrue(child["nested"])
+        self.assertEqual(child["nestedVia"], "sub-issues")
+        self.assertIn(
+            f"{CHILD_B} looks like a nested epic; it was recorded but not traversed.",
+            manifest["traversalNotes"],
+        )
+        # Recorded, not traversed: its own sub-issues stay out of the manifest.
+        self.assertNotIn(
+            "example-org/example-quota#901", [c["ref"] for c in manifest["children"]]
+        )
+
+    def test_the_scope_caveat_agrees_with_itself_on_one_nested_epic(self):
+        self.world["subIssues"][CHILD_B] = [
+            "example-org/example-quota#901",
+            "example-org/example-quota#902",
+        ]
+        manifest = self.collect()
+        caveat = summary_mod._scope_caveat(manifest)
+        self.assertIn("1 nested epic was recorded", caveat)
+        # Both stages ran on one collector; the note must appear once.
+        self.assertEqual(len(manifest["traversalNotes"]), 1)
+
+    def test_one_sub_issue_is_a_child_not_a_nested_epic(self):
+        self.world["subIssues"][CHILD_B] = ["example-org/example-quota#901"]
+        manifest = self.collect()
+        self.assertFalse(self.nested(manifest, CHILD_B)["nested"])
+
+    def test_an_epic_label_marks_a_nested_epic_without_asking_github(self):
+        self.world["issues"][CHILD_B] = issue(
+            CHILD_B, "Metering epic", labels=[{"name": "Epic"}]
+        )
+        manifest = self.collect()
+        child = self.nested(manifest, CHILD_B)
+        self.assertTrue(child["nested"])
+        self.assertEqual(child["nestedVia"], "label")
+
+    def test_body_references_decide_only_when_sub_issues_cannot_answer(self):
+        """A repo without the sub-issues feature 404s, and the body is all there is.
+
+        Even then an upward reference is not a child: the fallback has to drop
+        the epic being traversed before it counts.
+        """
+        self.world["noSubIssues"] = ["example-org/example-quota"]
+        self.world["issues"][EPIC] = issue(
+            EPIC, "Tiered quota enforcement", body=f"- [ ] {CHILD_A}\n- [ ] {CHILD_B}\n"
+        )
+        self.world["issues"][CHILD_A] = issue(
+            CHILD_A,
+            "Route by tier",
+            body="- [ ] example-org/example-quota#901\n- [ ] example-org/example-quota#902\n",
+        )
+        self.world["issues"][CHILD_B] = issue(
+            CHILD_B, "Expose quota metrics", body=f"Parent {EPIC}. Tracks {CHILD_A}."
+        )
+        manifest = self.collect()
+        self.assertEqual(self.nested(manifest, CHILD_A)["nestedVia"], "body-references")
+        self.assertFalse(
+            self.nested(manifest, CHILD_B)["nested"],
+            "the epic being traversed is not one of its child's children",
+        )
+
+    # --- unobserved runs are not all the same -----------------------------
+
+    def unobserved_report(self, mappings=(EPIC,)):
+        manifest = self.collect()
+        plan = self.plan(manifest, REQUIREMENTS)
+        result = assemble_mod.build(
+            {
+                "jira": {"key": KEY, "summary": "Tiered quota", "status": "In Progress"},
+                "mappings": [{"ref": ref} for ref in mappings],
+                "manifest": manifest,
+                "diff": plan,
+                "requirements": REQUIREMENTS,
+                "assessments": [],
+                "summary": "Nothing upstream could be read.",
+                "generatedAt": "2026-10-01T00:00:00Z",
+            }
+        )
+        return manifest, plan, result
+
+    def test_a_forbidden_epic_is_not_reported_as_a_missing_mapping(self):
+        self.world["forbidden"] = ["example-org/example-quota"]
+        manifest, plan, result = self.unobserved_report()
+
+        self.assertEqual(manifest["unobservedKind"], scope_mod.ACCESS_DENIED)
+        self.assertIn("access to it was denied", manifest["unobservedReason"])
+        report = result["report"]
+        self.assertIn("Unknown — upstream access denied", report)
+        self.assertNotIn("upstream mapping missing", report)
+        # The link is already correct; asking for it again is the wrong action.
+        self.assertIn("Read access to example-org/example-quota#300", report)
+        self.assertIn("read access to the linked", plan["autoFillGap"])
+
+    def test_a_missing_epic_is_reported_as_a_bad_link_not_an_absent_one(self):
+        self.world["missing"] = [EPIC]
+        manifest, plan, result = self.unobserved_report()
+
+        self.assertEqual(manifest["unobservedKind"], scope_mod.NOT_FOUND)
+        report = result["report"]
+        self.assertIn("Unknown — upstream epic not found", report)
+        self.assertNotIn("upstream mapping missing", report)
+        self.assertIn("could not be found", plan["autoFillGap"])
+
     def test_no_mapping_produces_a_partial_report_not_a_zero_one(self):
         manifest = collect_mod.empty_manifest(KEY)
         plan = diff_mod.plan({"snapshot": None}, manifest, REQUIREMENTS, [])
-        self.assertEqual(plan["autoFill"], "unable-to-assess-missing-mapping")
+        self.assertEqual(plan["autoFill"], scope_mod.AUTO_FILL)
+        self.assertEqual(manifest["unobservedKind"], scope_mod.NO_MAPPING)
         result = assemble_mod.build(
             {
                 "jira": {"key": KEY, "summary": "Tiered quota", "status": "In Progress",
@@ -767,6 +966,136 @@ class TwoOutputTest(PipelineTest):
         self.assertEqual(result["outcomes"]["confirmed-unmet"], 1)
         self.assertEqual(result["outcomes"]["unverified"], 0)
         self.assertEqual(sum(result["outcomes"].values()), 2)
+
+    def _merged(self, requirement_id="AC1"):
+        return assessment(
+            requirement_id, "Evidence found",
+            [{"ref": PR_A, "kind": "pr", "state": "merged", "at": "2026-09-18T09:00:00Z"}],
+            "merged",
+        )
+
+    def test_evidence_found_is_refused_while_a_clause_is_undecided(self):
+        """The rule requirements.md already states, now enforced rather than hoped for.
+
+        A two-clause criterion whose second clause names a TBD is not met,
+        however good the evidence for the first clause is.
+        """
+        claim = self._merged()
+        claim["unresolvedClauses"] = ["the retention window is given as TBD"]
+        with self.assertRaises(ValueError) as caught:
+            self.both(assessments=[claim, assessment("AC2", "No evidence found", [], "none")])
+        message = str(caught.exception)
+        self.assertIn("claims every clause of the criterion holds", message)
+        self.assertIn("undecided: the retention window is given as TBD", message)
+
+    def test_evidence_found_is_refused_while_a_clause_is_unsupported(self):
+        claim = self._merged()
+        claim["uncoveredClauses"] = ["nothing establishes the per-tier rate limit"]
+        with self.assertRaises(ValueError) as caught:
+            self.both(assessments=[claim, assessment("AC2", "No evidence found", [], "none")])
+        self.assertIn(
+            "unsupported by evidence: nothing establishes the per-tier rate limit",
+            str(caught.exception),
+        )
+
+    def test_the_same_criterion_assessed_partial_with_open_clauses_is_accepted(self):
+        """The refusal has to leave a correct way through, or it just blocks the run."""
+        claim = assessment(
+            "AC1", "Partial evidence",
+            [{"ref": PR_A, "kind": "pr", "state": "merged", "at": "2026-09-18T09:00:00Z"}],
+            "merged",
+        )
+        claim["uncoveredClauses"] = ["nothing establishes the per-tier rate limit"]
+        result, _, _ = self.both(
+            assessments=[claim, assessment("AC2", "No evidence found", [], "none")]
+        )
+        self.assertEqual(result["outcomes"]["met"], 0)
+        self.assertEqual(result["outcomes"]["partial"], 1)
+
+    def test_a_clean_evidence_found_is_still_met(self):
+        result, _, _ = self.both()
+        self.assertEqual(result["outcomes"]["met"], 1)
+
+    def test_an_uncovered_clause_is_named_in_the_full_assessment(self):
+        """And kept apart from an undecided one: different ask, different person."""
+        claim = assessment(
+            "AC1", "Partial evidence",
+            [{"ref": PR_A, "kind": "pr", "state": "merged", "at": "2026-09-18T09:00:00Z"}],
+            "merged",
+        )
+        claim["uncoveredClauses"] = ["nothing establishes rejection above the tier quota"]
+        _, report, _ = self.both(
+            assessments=[claim, assessment("AC2", "No evidence found", [], "none")]
+        )
+        self.assertIn("Clause not covered", report)
+        self.assertIn("nothing establishes rejection above the tier quota", report)
+        self.assertNotIn("Decision needed", report)
+
+    def test_open_clauses_survive_being_carried_forward(self):
+        """A reused assessment must not launder a bad claim into a clean one."""
+        claim = self._merged()
+        claim["unresolvedClauses"] = ["the retention window is given as TBD"]
+        merged, _, problems = assemble_mod.merge([REQUIREMENTS[0]], [claim], {}, "2026-10-01T00:00:00Z")
+        self.assertEqual(merged[0]["unresolvedClauses"], ["the retention window is given as TBD"])
+        self.assertTrue(outcomes_mod.problems(merged))
+
+    def test_a_confirmed_unmet_criterion_is_a_finding_not_a_schedule_item(self):
+        """It belongs in Attention needed, with the artifact that refutes it.
+
+        Describing it as "tracked and incomplete" alongside work still in
+        flight is the failure: a reader skims Remaining as a list of things
+        that will arrive, and this is a thing that will not.
+        """
+        declared = assessment(
+            "AC2", "No evidence found",
+            [{"ref": PR_B, "kind": "pr", "state": "merged", "at": "2026-09-20T09:00:00Z"}],
+            "merged",
+        )
+        declared["outcome"] = "confirmed-unmet"
+        _, _, summary = self.both(assessments=[self._merged(), declared])
+        attention = next(
+            line for line in summary.splitlines() if line.startswith("- Attention needed:")
+        )
+        self.assertIn("is not satisfied", attention)
+        self.assertIn("decide whether to reopen the work or revise the criterion", attention)
+        remaining = next(line for line in summary.splitlines() if line.startswith("- Remaining:"))
+        self.assertNotIn("AC2", remaining)
+        self.assertIn("reopen or re-scope AC2", summary)
+
+    def test_an_open_decision_names_the_decision(self):
+        claim = assessment(
+            "AC1", "Partial evidence",
+            [{"ref": PR_A, "kind": "pr", "state": "merged", "at": "2026-09-18T09:00:00Z"}],
+            "merged",
+        )
+        claim["unresolvedClauses"] = ["the retention window is given as TBD"]
+        _, _, summary = self.both(
+            assessments=[claim, assessment("AC2", "No evidence found", [], "none")]
+        )
+        self.assertIn("the retention window is given as TBD", summary)
+
+    def test_the_trend_says_which_baseline_it_compares_against(self):
+        """"Draft snapshot" is this tool's word. The reader needs the question answered."""
+        snapshot = {
+            "requirements": [
+                dict(REQUIREMENTS[0], assessment="No evidence found", evidence=[]),
+                dict(REQUIREMENTS[1], assessment="No evidence found", evidence=[]),
+            ]
+        }
+        for publication, expected in (
+            ("published", "last update posted here on 2026-09-01"),
+            ("draft", "last assessment on 2026-09-01, which was not posted here"),
+        ):
+            line = summary_mod.trend_line(
+                {
+                    "diff": {"baseline": {"generatedAt": "2026-09-01T00:00:00Z",
+                                          "publication": publication}},
+                    "baselineSnapshot": snapshot,
+                },
+                outcomes_mod.tally(snapshot["requirements"]),
+            )
+            self.assertIn(expected, line)
+            self.assertNotIn("snapshot of", line)
 
     def test_a_partial_criterion_is_never_counted_as_met(self):
         result, report, _ = self.both(

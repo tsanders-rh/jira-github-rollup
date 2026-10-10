@@ -17,6 +17,7 @@ from . import links as links_mod
 from . import metrics as metrics_mod
 from . import outcomes as outcomes_mod
 from . import render as render_mod
+from . import scope as scope_mod
 from . import snapshots as snapshots_mod
 from . import summary as summary_mod
 from . import util
@@ -29,6 +30,10 @@ ASSESSMENT_FIELDS = (
     "gap",
     "downstream",
     "unresolvedClauses",
+    # Checkable clauses the evidence does not support. Carried for the same
+    # reason as `outcome`: dropping it would turn a half-proved criterion into
+    # a fully proved one, and would hide the bad claim from `outcomes.problems`.
+    "uncoveredClauses",
     "notes",
     # A declared `confirmed-unmet` and what refutes the criterion. Carried here
     # rather than derived: dropping them would turn a finding that something
@@ -37,11 +42,6 @@ ASSESSMENT_FIELDS = (
     "outcome",
     "refutingEvidence",
 )
-
-MISSING_MAPPING_GAP = (
-    "Link the GitHub epic on the Jira issue; this requirement cannot be assessed until then."
-)
-
 
 def _key(requirement):
     return (
@@ -107,6 +107,7 @@ def merge(requirements, assessments, diff, generated_at):
             "gap": None,
             "downstream": {"state": "unknown", "detail": None},
             "unresolvedClauses": [],
+            "uncoveredClauses": [],
             "outcome": None,
             "refutingEvidence": [],
             "reused": False,
@@ -127,10 +128,10 @@ def merge(requirements, assessments, diff, generated_at):
                 record["reused"] = True
                 record["assessedAt"] = carried.get("assessedAt")
                 record["assessedFromSnapshot"] = carried.get("assessedFromSnapshot")
-            elif auto_fill == "unable-to-assess-missing-mapping":
+            elif auto_fill in (scope_mod.AUTO_FILL, scope_mod.LEGACY_AUTO_FILL):
                 record["assessment"] = "Unable to assess"
                 record["evidenceState"] = "not observed"
-                record["gap"] = MISSING_MAPPING_GAP
+                record["gap"] = (diff or {}).get("autoFillGap") or scope_mod.gap(None)
             else:
                 missing.append(f"{record['id']} ({record['sourceKey']})")
                 merged.append(record)

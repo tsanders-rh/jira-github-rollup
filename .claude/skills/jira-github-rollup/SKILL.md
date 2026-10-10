@@ -36,10 +36,14 @@ These hold at every step. They are not restated later.
    source. No link means a partial draft, not a title search and not a report of
    unstarted work.
 4. **GitHub is read-only.** `scripts/jgr/ghclient.py` constructs read verbs only.
-5. **The only thing written outside Jira is an append-only snapshot** under
+5. **The only thing written outside Jira is a snapshot** under
    `~/.jira-github-rollup/snapshots/<JIRA-KEY>/`, plus a raw-response cache under
-   `~/.jira-github-rollup/cache/<JIRA-KEY>/`. No run overwrites or deletes a
-   snapshot.
+   `~/.jira-github-rollup/cache/<JIRA-KEY>/`. No run overwrites or deletes
+   another run's snapshot. **The assessment payload is immutable once written**:
+   the only permitted later change is `promote`, which adds publication
+   metadata (`publication`, `publishedAt`, `jiraCommentId`, `published`) and
+   renames `-draft.json` to `-published.json`. It never touches a requirement,
+   an assessment, an evidence item or a count.
 6. **Counts are unweighted and never a forecast.** No velocity, no burn-down, no
    projected dates, no partial credit. A count that was not observed is
    `unknown`, never `0`, `0/0`, `N/A` or `0%`. Closed-issue ratios are never
@@ -100,8 +104,23 @@ searchJiraIssuesUsingJql: key = <KEY> AND comment ~ "github.com"
 Only on a hit, re-fetch the issue with comments and re-run `refs`. Ask whatever
 question `refs.json` returns rather than resolving it yourself.
 
-Still no mapping: skip to step 5 with `--epics '[]'`, which produces the partial
-report. Do not search GitHub for a plausible epic.
+Still no mapping: run the partial sequence below and go to step 6. Do not search
+GitHub for a plausible epic.
+
+```bash
+python3 rollup.py collect --key <KEY> --epics '[]' --out manifest.json
+python3 rollup.py diff --manifest manifest.json \
+  --requirements requirements.json --out diff.json
+python3 rollup.py assemble --in assembly.json --manifest manifest.json \
+  --diff diff.json --requirements requirements.json --assessments '[]' \
+  --report full-assessment.md --summary jira-summary.md --out result.json
+```
+
+The empty epic list sets `observed: false`, so every row is auto-filled `Unable
+to assess` with the gap naming the link that is needed, child counts render
+`unknown` rather than `0`, and `--assessments '[]'` is correct — there is
+nothing to assess, and nothing is being skipped. The Jira side is still
+reported in full. Say in `summary` that no upstream source was inspected.
 
 ### 3. Collect the evidence
 
@@ -145,9 +164,10 @@ content hashing, when the mapping changed, or when nothing was observed.
 
 ### 5. Assess the requirements in `reassess`
 
-For each one, read `references/requirements.md` and work from the requirement to
-the evidence — never from an issue to a criterion it might satisfy. Read bodies
-and test content deliberately:
+Read the assessment half of `references/requirements.md` **once**, then work
+through the list. For each requirement, work from the requirement to the
+evidence — never from an issue to a criterion it might satisfy. Read bodies and
+test content deliberately:
 
 ```bash
 python3 rollup.py excerpt --key <KEY> --ref example-org/example-gateway#413 --field body
@@ -167,10 +187,20 @@ out of both `assessments.json` and `diff.json`'s `reuse` is an error, not an
 
 The four coverage assessments become the four outcomes the reader counts, and
 the mapping is fixed in code: `Evidence found → met`, `Partial evidence →
-partial`, `No evidence found` and `Unable to assess → unverified`. The one
-outcome you may declare by hand is `"outcome": "confirmed-unmet"`, which also
-requires `refutingEvidence` naming what shows the criterion is not satisfied.
-The assembler rejects the claim otherwise; it never infers it from a gap.
+partial`, `No evidence found` and `Unable to assess → unverified`.
+
+Both ends of that are guarded, because both are how a count becomes a lie:
+
+- **`Evidence found` is a claim about every clause of the criterion**, not about
+  the work existing. Any clause still undecided goes in `unresolvedClauses`, any
+  clause the evidence does not support goes in `uncoveredClauses`, and either
+  one makes the honest assessment `Partial evidence`. The assembler refuses
+  `Evidence found` with a clause open rather than downgrading it quietly — the
+  detail column would otherwise still read as fully established.
+- **`confirmed-unmet` is the one outcome you may declare by hand**, via
+  `"outcome": "confirmed-unmet"` plus `refutingEvidence` naming what shows the
+  criterion is not satisfied. The assembler rejects the claim otherwise; it
+  never infers it from a gap.
 
 ### 6. Assemble both outputs
 
@@ -268,6 +298,9 @@ append-only store. These are the ones still available to you:
   exercises the behaviour the criterion describes, or do not claim `tested`.
 - **Writing off a whole criterion because one clause is undecided.** Assess the
   checkable clauses; name the decision the rest waits on.
+- **Calling a criterion met on evidence that the work exists.** A criterion is a
+  conjunction. Evidence for its main clause is not evidence for all of them —
+  name the rest in `uncoveredClauses` and assess `Partial evidence`.
 - **Calling merged work shipped.** Downstream qualification is a separate
   question, answered separately for each requirement.
 - **Burying an access failure.** An unreadable repo changes what the coverage

@@ -538,3 +538,60 @@ reasoning.
   data-type="layout-*">`) are refused by Jira outright and are never emitted.
   The `wiki` and `plain` targets stay for other doors: the REST v3 comment API
   takes ADF and nothing else.
+- *2026-10-10* — **`met` now has to be proved clause by clause.** Review raised
+  the strongest objection available against this design: `Evidence found → met`
+  let evidence that the *work exists* stand in for evidence that *every clause
+  holds*, which is the one semantic error the whole skill is built to avoid.
+  `requirements.md` already forbade `Evidence found` while a clause was
+  undecided, and nothing enforced it — a prose rule with no teeth, which by the
+  repo's own prose/code split is a coded rule in the wrong file.
+
+  Assessments now carry a second clause list. `unresolvedClauses` is for
+  clauses nobody has *decided*; `uncoveredClauses` is for clauses that are
+  checkable but unsupported by anything inspected. Either one makes
+  `Evidence found` a refusal. It refuses rather than downgrading to
+  `Partial evidence` on purpose: the downgrade produces the right count beside
+  a `coverageDetail` still written as though the criterion were established,
+  which is the worse of the two errors. The two lists render separately,
+  because one needs engineering or a link and the other needs a product call.
+
+  Naming the clauses stays a judgement and stays with the model. Only the
+  consequence — that an open clause is not `met` — moved into code.
+- *2026-10-10* — **Reuse is invalidated for the two things the content hashes
+  cannot see.** A child's `contentHash` covers its body, state and PRs, so it
+  catches almost everything. Two gaps did not reach it.
+
+  A stored `downstream: pending` is now always reassessed. Downstream artifacts
+  are outside the traversal by design, so no hash computed here can ever
+  contradict one, and carrying it forward republished "qualification
+  outstanding" indefinitely after anyone last checked. `unknown` stays
+  reusable: nobody looked then, nobody looked now, and repeating that is true.
+
+  Declared dependencies are now stored in `scope.dependencies` with their state
+  and compared between runs; a dependency closing, appearing, disappearing or
+  changing readability invalidates any assessment resting on it. A baseline
+  predating the field treats every dependency as changed, following the same
+  rule as a missing content hash: unknown is not unchanged.
+- *2026-10-10* — **A `confirmed-unmet` criterion is a finding, not a schedule
+  item.** It was being rendered in the summary's Remaining bullet as "tracked
+  and incomplete" — the same words as work still in flight. A reader skims
+  Remaining as a list of things that will arrive, and this is a thing that will
+  not. It moves to Attention needed, with the artifact that refutes it and an
+  explicit "decide whether to reopen the work or revise the criterion".
+
+  Two smaller corrections to the same bullet: an open decision now names the
+  decision rather than reporting that one exists, and the trend line names its
+  baseline as "the last update posted here" or "the last assessment … not
+  posted here" instead of "draft snapshot", which is this tool's vocabulary and
+  not a Jira reader's.
+- *2026-10-10* — **"Append-only" was overclaiming, and is now stated exactly.**
+  `promote` rewrites a snapshot in place and renames it, which the word
+  disallowed as written. The accurate rule, now in `SKILL.md`,
+  `pipeline.md` and `snapshots.md`: no run ever reads, rewrites or deletes
+  another run's snapshot, and the assessment payload (`jira`, `mappings`,
+  `scope`, `access`, `outcomes`, `requirements`, `inventory`) is immutable once
+  written. `promote` is additive and touches only `publication`,
+  `publishedAt`, `jiraCommentId` and `published`. Publication is a fact about a
+  Jira comment and must never be able to edit what was judged.
+
+  No behaviour changed here; the documentation was wrong about the code.
