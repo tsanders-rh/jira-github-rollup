@@ -424,3 +424,117 @@ reasoning.
   was a free-text delta against the prior comment; the new one is the quantified
   version of the same idea with a real data source behind it. Keeping both would
   have invited the two to disagree.
+- *2026-10-08* — **The deterministic half of a run moves into scripts, and raw
+  API responses stop entering the conversation.** The repo now contains code:
+  `.claude/skills/jira-github-rollup/scripts/` (Python 3.9+, standard library
+  only) and `tests/`. The division is that code does what is mechanical and
+  fails silently when done by hand — reference normalization and
+  deduplication, traversal, caching, content hashing, change detection,
+  counting, percentages, rendering, and the snapshot store — while the model
+  does what is judgement: reading the Jira, quoting requirements verbatim,
+  deciding what evidence establishes, and writing the prose. No hard constraint
+  is relaxed. GitHub access remains read-only (`gh` only, no mutating
+  subcommand), no Jira issue is created, nothing in `scripts/` can reach Jira at
+  all, and the posting step is unchanged: the model shows a draft, waits for
+  approval of that specific draft, and posts it itself. No new dependency and no
+  new credential; `gh` was already authenticated.
+
+  Rejected alternatives: *having the scripts call Jira* — it is MCP-only, and
+  giving a script its own Jira credential would add a write path the approval
+  rule could not see; *letting the scripts decide coverage* — a script that
+  rules on whether a merged PR satisfies a criterion is confidently wrong in a
+  table cell, which is the failure this design exists to prevent; *trimming the
+  instructions by deleting rules* — the reduction came from removing duplicated
+  prose and moving detail into references read on demand, not from dropping
+  safeguards.
+
+  Two consequences recorded deliberately. The **cache** at
+  `~/.jira-github-rollup/cache/<JIRA-KEY>/` is a second write outside Jira, so
+  hard constraint 5 now names it; it holds raw `gh` responses, is overwritten
+  freely, and is disposable — it is the mechanism by which payloads stay out of
+  context. And collection does **not** read that cache by default: change
+  detection depends on each run actually asking GitHub, so the cache saves
+  context, not calls.
+- *2026-10-08* — **A second run reuses unchanged assessments, and the bias on
+  doubt is to reassess.** Snapshot schema v2 adds `rulesVersion`, per-child
+  `contentHash` and `accessible`, `scope.observed` / `unobservedReason`, an
+  `inventory` block, and per-requirement `reused` / `assessedAt` /
+  `assessedFromSnapshot`. v1 snapshots stay readable and are not rewritten;
+  lacking hashes, they force one full reassessment and the run after that is
+  incremental.
+
+  The hash deliberately **excludes `updatedAt`**. A PR merging, a check
+  flipping, or a review landing changes the evidence without touching the
+  issue, so an `updatedAt` comparison would miss exactly the changes a rollup
+  exists to report. A requirement is reassessed when its text changed, when any
+  artifact its evidence rests on changed or was added, removed, reopened, or
+  lost access, when it was not previously `Evidence found` and anything upstream
+  moved, when the mapping or the rules version changed, or when the dependency
+  is simply unclear. A wasted assessment costs tokens; a wrongly reused one
+  costs the report its credibility. `--full-refresh` reassesses everything.
+
+  The report is always assembled complete, reused rows included and rendered
+  identically to fresh ones — a run never emits only the rows that changed. A
+  requirement with neither a fresh assessment nor a reusable one is an **error**
+  from the assembler, not an automatic `Unable to assess`: filling a gap with a
+  verdict nobody reached is the one failure this pipeline must not have.
+- *2026-10-08* — **Savings are reported as measurements in the unit measured.**
+  `tests/measure_run.py` prints the LLM-facing input for a full and an
+  incremental run over a fixture, and reports bytes when no tokenizer is
+  installed rather than dividing bytes by four. On the larger fixture (15
+  children, 13 PRs, long bodies) a full run is 29,625 bytes of manifest plus
+  1,855 of diff plus 51,444 of artifact text to read; the incremental run is
+  29,625 + 2,793 + 0, with 77,759 bytes of raw `gh` responses staying on disk.
+  `SKILL.md` went from 33,963 to 12,004 bytes, with the detail moved into
+  references loaded on demand. No token or cost claim is made from these: one
+  fixture is not a workload, and the whole of the incremental difference is
+  artifact text that no longer has to be read — the manifest is the same size
+  either way.
+- *2026-10-09* — **One assessment, two outputs: a full assessment for review and
+  a Jira summary draft for posting.** `rollup.py assemble` now takes both
+  `--report` and `--summary`. The full assessment keeps the criterion-by-criterion
+  evidence, downstream qualification, and the collection diagnostics; the summary
+  is 150–250 words of prose with the outcome table, four fixed bullets, a trend
+  line and at most one scope caveat. **Only the summary is ever posted.**
+
+  They are rendered from one merge and one tally, and `assemble.cross_check`
+  refuses to emit them if the outcome row is missing from either, if the counts
+  do not sum to the criteria total, or if a local path reached the summary. The
+  alternative — two passes over the data — is how a comment ends up claiming
+  three met beside a table that says two, which destroys trust in both.
+
+  Four mutually exclusive outcomes (`jgr/outcomes.py`) sit on top of the four
+  coverage assessments: `Evidence found → met`, `Partial evidence → partial`,
+  `No evidence found` and `Unable to assess → unverified`. `confirmed-unmet` is
+  the only outcome the model may declare, and only with `refutingEvidence`;
+  absence stays `unverified` however much of it there is. Collapsing the two
+  would turn an untracked requirement into a failed one and send a reader to
+  argue with a team that may have shipped the work somewhere nobody linked.
+
+  `RULES_VERSION` was **not** bumped. The stored assessments map onto the new
+  outcomes by construction, so bumping would discard every reusable assessment
+  to produce identical judgements.
+
+  Delivery confidence is deliberately not a function of the counts.
+  `outcomes.confidence()` returns `Not assessed` when there is no fix version,
+  when any criterion lacks downstream qualification evidence, or when anything
+  is unverified — and names which applied. Nine met criteria with no release
+  target is not "on track".
+
+  Two things are now blocked in code rather than asked for in prose. `links.py`
+  refuses a local path or `file://` URL in publishable text, because the
+  manifest is full of cache paths and one interpolated into a comment publishes
+  the shape of someone's home directory to a whole project. And
+  `snapshots.promote` requires a non-blank Jira comment id, because promoting on
+  intent rather than on a returned id is how a failed post advances the
+  published baseline and silently destroys the next run's comparison.
+- *2026-10-09* — **The Jira comment tool takes Markdown, so the default path
+  converts nothing.** `addOrEditJiraIssueComment` documents `commentBody` as
+  Markdown by default with `contentFormat: "markdown" | "html"`; wiki markup is
+  not an input format for it. `convert` gains an `html` target as the fallback,
+  emitting only the elements the Atlassian editor accepts — headings, `p`,
+  `ul/li`, `table/thead/tbody`, `a`, `strong`, `em`, `code`, `hr` — and escaping
+  cell text before inserting any of them. Layout wrappers (`<section
+  data-type="layout-*">`) are refused by Jira outright and are never emitted.
+  The `wiki` and `plain` targets stay for other doors: the REST v3 comment API
+  takes ADF and nothing else.

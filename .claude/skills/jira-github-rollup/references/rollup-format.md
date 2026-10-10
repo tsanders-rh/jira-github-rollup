@@ -3,30 +3,73 @@
 The output contract for a drafted rollup. Structure is fixed; length is not — but
 shorter is better. Target 15–30 lines of body text, plus one row per requirement.
 
+**`jgr/render.py` emits this shape**, driven by `rollup.py assemble`. You do not
+write the report by hand: you supply the judgement fields — the Summary, each
+requirement's assessment and its evidence, caveats, risks, extra trend notes —
+and the renderer places them in the sections, formats every ratio, and derives
+the status line. Read this file to know what a cell is claiming and what belongs
+in the text you supply; read it before changing the renderer. If the rendered
+draft disagrees with this document, that is a bug in one of the two, not a
+licence to retype the report.
+
 "Requirement" here means any statement extracted in `SKILL.md` step 2 —
 acceptance criterion (`AC`), success criterion (`SC`), definition-of-done item
 (`DoD`), or unlabelled (`REQ`). The prefix is how the type survives into the
 output; it is never dropped, and the types are never added together under the
 label "acceptance criteria".
 
-## Two renderings of one rollup
+## Two outputs from one assessment
 
-The content below is the contract. It gets rendered twice, in different markup,
-and the two are not interchangeable:
+`rollup.py assemble` renders two documents from the same merged assessment and
+the same tally. They have different jobs and different readers:
 
-| | Rendering | Markup |
+| | Audience | Length | Posted? |
+| --- | --- | --- | --- |
+| **Full assessment** (`--report`) | An engineer reviewing the evidence, in this conversation | As long as the evidence needs | Never |
+| **Jira summary** (`--summary`) | An EM or exec scanning the issue | 150–250 words of prose | Only this one, only on explicit approval |
+
+Both are GitHub-flavored Markdown, because that is what the conversation renders
+*and* what the Jira comment tool documents as its default input. A reviewer
+asked to approve wiki markup in a terminal is approving a wall of punctuation
+rather than the table they will get.
+
+**The two can never disagree.** They are built from one `outcomes.tally()` call,
+and `assemble.cross_check` refuses to emit them if the outcome row is absent
+from either or if the counts do not sum to the criteria total. Do not hand-edit
+one to match the other — fix the assessment and re-render.
+
+The split is about detail, not about honesty. Everything in the summary is also
+in the full assessment. What stays out of the summary is the per-criterion
+analysis and the collection diagnostics; what stays out of the full assessment
+is nothing.
+
+### The four outcomes
+
+Both outputs count criteria into four mutually exclusive buckets that sum to the
+total. `jgr/outcomes.py` owns the mapping; it is not re-derived in prose.
+
+| Outcome | Means | Comes from |
 | --- | --- | --- |
-| **Draft** — shown in the conversation for review | always | **GitHub-flavored Markdown** |
-| **Payload** — passed to the Jira comment tool after approval | only on approval | whatever that tool documents as its input format (see [Preparing the Jira payload](#preparing-the-jira-payload)) |
+| `met` | Every clause supported at the stated assessment level | `Evidence found` |
+| `partial` | Some clauses supported, others incomplete or unverified | `Partial evidence` |
+| `confirmed-unmet` | **Affirmative evidence the outcome is not satisfied** | A declared `outcome` plus `refutingEvidence`; never inferred |
+| `unverified` | Insufficient evidence, or collection did not reach it | `No evidence found`, `Unable to assess` |
 
-The draft is GFM because that is what the surrounding conversation renders. Jira
-wiki markup shown in a terminal is unreadable — `||` header rows and `h3.` lines
-do not render, so the reviewer is asked to approve a wall of punctuation instead
-of the table they are actually approving. Conversion happens once, at post time,
-against the format the tool actually accepts.
+The caption travels with the counts, every time: *Upstream evidence assessment,
+not release completion.* These count what the sources inspected establish, not
+what shipped, and they are never turned into a percentage of a feature.
 
-Everything else — sections, order, wording, what each cell contains — is
-identical in both. The markup changes; the rollup does not.
+`unverified` is the default for absence and stays there however much is missing.
+A criterion nobody linked work to is unverified with a tracking clarification —
+not unmet, and not a finding about whether the work exists.
+
+### Delivery confidence
+
+A judgement line, **not** a function of the counts. `outcomes.confidence()`
+returns `Not assessed` whenever the issue has no fix version, any criterion has
+no downstream qualification evidence, or anything is unverified — and it says
+which of those applied. Nine met criteria with no release target is still
+`Not assessed`; green in the table is not a delivery signal.
 
 ## Audience and tone
 
@@ -41,9 +84,10 @@ They do not want a changelog.
 - Uncertainty is stated, not smoothed over. "No activity since 2026-08-14" beats
   "progressing steadily."
 
-## Structure
+## Structure of the full assessment
 
-GitHub-flavored Markdown. This is what the reviewer sees.
+GitHub-flavored Markdown. This is what the reviewer sees, and it is never
+posted.
 
 ````markdown
 ### Upstream Development Rollup
@@ -72,16 +116,46 @@ materially uncovered or unassessable.>
 
 <C> acceptance criteria, <D> success criteria, <E> definition-of-done items.
 
-| Requirement | Evidence | Evidence state | Coverage | Gap / next validation step |
-| --- | --- | --- | --- | --- |
-| AC1 (RHOAIENG-1234) "<verbatim text>" | org/repo#413, org/repo#520 (merged 2026-09-18) | merged | Evidence found — <what the evidence establishes> | <what remains, or "—"> |
-| DoD1 (RHOAIENG-1234) "<verbatim text>" | org/repo#530 (merged 2026-10-01) | merged | Partial evidence — <covered clause>; <unresolved clause> cannot be checked until <decision> | <who decides> |
-| AC1 (RHOAIENG-1240) "<verbatim text>" | org/repo#88 (open) | planned | No evidence found — mapped issue is open; no implementation in the sources inspected | <next step> |
+| Outcomes met | Partial | Confirmed unmet | Unverified |
+| --- | --- | --- | --- |
+| 1 | 1 | 0 | 1 |
+
+_Upstream evidence assessment, not release completion. 3 criteria in total; the
+four columns are mutually exclusive and sum to that. These are the same counts
+the Jira summary carries._
+
+| Requirement | Outcome | Evidence | Evidence state | Coverage | Gap / next validation step |
+| --- | --- | --- | --- | --- | --- |
+| AC1 (RHOAIENG-1234) "<verbatim text>" | Met | org/repo#413, org/repo#520 (merged 2026-09-18) | merged | Evidence found — <what the evidence establishes> | <what remains, or "—"> |
+| DoD1 (RHOAIENG-1234) "<verbatim text>" | Partial | org/repo#530 (merged 2026-10-01) | merged | Partial evidence — <covered clause>; <unresolved clause> cannot be checked until <decision> | <who decides> |
+| AC1 (RHOAIENG-1240) "<verbatim text>" | Unverified | org/repo#88 (open) | planned | No evidence found — mapped issue is open; no implementation in the sources inspected | <next step> |
 
 #### Downstream qualification
 
 - AC1 (RHOAIENG-1234) — <what is still required downstream, or that downstream
   state was not inspected>
+
+#### Dependencies, decisions, and tracking gaps
+
+- **Decision needed** — SC4 (RHOAIENG-1234): <the undecided parameter>. Until it
+  is recorded, this clause is unassessable rather than unmet.
+- **Tracking clarification** — no upstream work in the traversed set maps to
+  SC6 (RHOAIENG-1234). Identify and link the work covering SC6 on RHOAIENG-1234.
+  Absence in the sources inspected is not a finding that the work does not exist.
+- **Dependency** — SC9: <linked Jira or epic>. <What the source that named it
+  said.>
+
+#### Collection scope and limitations
+
+- Jira sources read for requirements: description, sub-tasks.
+- Traversed 1 epic, 23 child issues across 3 repositories.
+- Not traversed: org/repo#1445 looks like a nested epic; it was recorded but not
+  traversed.
+- Not readable: org/other#40 (404) — <detail>.
+- Evidence basis: issue and pull-request metadata, changed-file lists, and CI
+  check results. No diffs were read, so a changed file or a passing job locates
+  the work; it does not by itself verify a behaviour.
+- No downstream build, payload, or qualification run was inspected.
 
 #### Coverage caveats
 
@@ -133,6 +207,77 @@ Markdown specifics worth getting right:
 - Keep the blank line between a heading and the table under it. Some renderers
   swallow a table that starts immediately after a heading.
 
+## Structure of the Jira summary draft
+
+`jgr/summary.py` emits this. It is the only thing ever posted, and it is a
+second rendering of the same assessment — not a shortened report and not a
+progress bar.
+
+````markdown
+### <Requirement name> — Upstream rollup
+
+**Updated:** <YYYY-MM-DD>
+**Source:** [org/repo#N — <epic title>](https://github.com/org/repo/issues/N)
+**Delivery confidence:** <value> — <brief reason>
+
+| Outcomes met | Partial | Confirmed unmet | Unverified |
+| --- | --- | --- | --- |
+| 1 | 1 | 0 | 1 |
+
+_Upstream evidence assessment, not release completion. 3 criteria in total._
+
+- Progress: <criterion> met ([PR repo#520](...)); <criterion> partly supported.
+- Remaining: <criterion> tracked and incomplete ([issue repo#88](...));
+  downstream qualification was not inspected for AC1.
+- Attention needed: no upstream work in the traversed set is linked to
+  RHOAIENG-1234 SC6 — identify and link the work covering SC6; a decision is
+  open on SC4.
+- Next: link the owning issue or epic for SC6; record the open decision on SC4.
+  No owner or date for these is recorded in the sources inspected.
+
+Trend: since the published snapshot of 2026-10-01, outcomes met 1→3,
+unverified 4→2.
+
+Scope: 2 nested epics were recorded but not traversed. Criteria owned by that
+work would not appear here, so an unverified row is not evidence that the work
+is missing.
+
+[Full assessment](https://durable.example/rollups/RHOAIENG-1234.md)
+````
+
+The rules, all enforced in `summary.py`:
+
+- **150–250 words**, counting prose only — URLs and the outcome table are
+  scanned, not read, so neither inflates the count. Over budget, the renderer
+  names fewer criteria per bullet rather than dropping a bullet. All four
+  bullets are always present: a summary missing "Attention needed" is a
+  different document, not a shorter one.
+- **Four bullets, fixed order and fixed labels.** Progress, Remaining,
+  Attention needed, Next.
+- **1–2 targeted links per bullet**, with descriptive labels (`PR example-gateway#1605`, not
+  a bare URL and not "click here"). The full inventory stays in the detailed
+  assessment.
+- **What a link points at depends on the outcome.** For `met` or `partial`, the
+  artifact that landed the work — strongest first: merged PR, closed issue, open
+  PR. For anything else, the issue that *owns* the work — open issue first,
+  merged PR last. A merged PR hung off an unverified criterion reads as though
+  the criterion shipped.
+- **Criteria have no anchors in Jira**, so a criterion is pointed at by linking
+  the parent issue and naming the criterion in the link text: `RHOAIENG-1234 SC5`.
+  This needs `jira.site` in the assembly; without it the text is unlinked rather
+  than linked to a guess.
+- **Owners and dates appear only where a source established one.** The Next
+  bullet ends by saying none is recorded rather than leaving the omission to be
+  read as "nobody is on it".
+- **The scope caveat is one sentence and conditional** — unreadable sources,
+  untraversed nested epics, or incomplete traversal. It exists so an unverified
+  count is not read as a finding about the work.
+- **The "Full assessment" link is omitted unless a durable, reader-accessible
+  URL was supplied.** A local path is dropped, not published; `links.py` and
+  `assemble.cross_check` both refuse one.
+- **No collection diagnostics, no authentication notes, no per-criterion
+  analysis.** Those are what the full assessment is for.
+
 ## Structure when no upstream mapping exists
 
 Same contract, minus the sections nothing was inspected for, plus one that says
@@ -162,10 +307,14 @@ Child requirements read: RHOAIENG-1240 — <summary> (<status>)
 
 <C> acceptance criteria, <D> success criteria, <E> definition-of-done items.
 
-| Requirement | Evidence | Evidence state | Coverage | Gap / next validation step |
-| --- | --- | --- | --- | --- |
-| AC1 (RHOAIENG-1234) "<verbatim text>" | — | — | Unable to assess — upstream mapping missing | Link the upstream epic |
-| AC1 (RHOAIENG-1240) "<verbatim text>" | — | — | Unable to assess — upstream mapping missing | Link the upstream epic |
+| Outcomes met | Partial | Confirmed unmet | Unverified |
+| --- | --- | --- | --- |
+| 0 | 0 | 0 | 2 |
+
+| Requirement | Outcome | Evidence | Evidence state | Coverage | Gap / next validation step |
+| --- | --- | --- | --- | --- | --- |
+| AC1 (RHOAIENG-1234) "<verbatim text>" | Unverified | — | — | Unable to assess — upstream mapping missing | Link the upstream epic |
+| AC1 (RHOAIENG-1240) "<verbatim text>" | Unverified | — | — | Unable to assess — upstream mapping missing | Link the upstream epic |
 
 #### What is needed to complete this assessment
 
@@ -330,11 +479,17 @@ Column by column:
 
 | Column | Contains |
 | --- | --- |
-| Requirement | `AC<n>` / `SC<n>` / `DoD<n>` / `REQ<n>` + `(SOURCE-KEY)`, then the text **in quotes, verbatim** |
+| Requirement | `AC<n>` / `SC<n>` / `DoD<n>` / `REQ<n>` + `(SOURCE-KEY)`, linked to the parent Jira when `jira.site` is known, then the text **in quotes, verbatim** |
+| Outcome | `Met` / `Partial` / `Confirmed unmet` / `Unverified` — derived from Coverage, never set by hand except a declared `confirmed-unmet` |
 | Evidence | Issue and PR references with merge dates, attributed to their epic when more than one is in scope; `—` when nothing is mapped |
 | Evidence state | One of: planned, in progress, in review, merged, tested; `—` when nothing is mapped |
 | Coverage | One of the four assessments, an em dash, then what it rests on |
 | Gap / next validation step | What remains, and who or what resolves it |
+
+Outcome and Coverage are the same judgement at two resolutions: Outcome is what
+gets counted in the table above and carried into the Jira summary; Coverage is
+the sentence that makes it checkable. They cannot disagree, because the renderer
+derives the first from the second.
 
 - The prefix carries the type and the key carries the source, and **neither is
   decoration.** IDs are numbered per type per source issue, so a table drawing on
@@ -469,24 +624,44 @@ words without the underscores.
 
 ## Preparing the Jira payload
 
-Only after the user approves the draft, and only for the string handed to the
-Jira comment tool. Nothing in this section applies to what you show in the
-conversation.
+Only after the user approves the summary, and only for the string handed to the
+Jira comment tool. **What is posted is the summary, never the full assessment.**
+Nothing in this section applies to what you show in the conversation.
 
-**Do not assume the format.** Jira Cloud sites may take wiki markup, Atlassian
-Document Format, or plain text depending on the site's editor and on what the
-MCP tool does with the value. Before converting, establish what the tool
-documents as its input: read the comment tool's parameter description and schema
-(`addOrEditJiraIssueComment`; its schema arrives with the tool definition). Let
-that decide the target format. If the tool's documentation is silent or
-ambiguous, prefer the plain-text structure below — it is the only rendering that
-degrades gracefully everywhere — and say in one line which format you sent and
-why, so a mis-render is diagnosable instead of mysterious.
+**Check the tool, do not assume the format.** The Atlassian MCP tool in use here
+is `addOrEditJiraIssueComment`, and its schema documents `commentBody` as
+**Markdown by default**, with `contentFormat: "markdown" | "html"` selecting
+between the two. Wiki markup is not an input format for it. So the normal path
+is to send `jira-summary.md` as written, with no conversion at all.
 
-**Never send the GFM draft verbatim** to a site that takes wiki markup. `###`
+That is a fact about this tool, not about Jira. A different site, a different
+MCP server, or a REST call goes through a different door — the REST v3 comment
+API takes Atlassian Document Format and nothing else. Re-read the schema that
+arrived with the tool definition rather than trusting this paragraph, and say in
+one line which format you sent, so a mis-render is diagnosable instead of
+mysterious.
+
+**Never send the GFM draft verbatim** to a target that takes wiki markup. `###`
 and `**bold**` are literal text there, the `| --- |` separator row renders as a
 table row of dashes, and the result looks like a bug in the issue rather than a
 report.
+
+`rollup.py convert --in jira-summary.md --target gfm|html|wiki|plain|adf`
+applies the rules below. The decision is yours; the transcription is not worth
+doing by hand. The subsections that follow describe what `convert` produces, and
+are what to check a surprising payload against.
+
+### If the target takes HTML
+
+`--target html` is the fallback when Markdown comes back mangled. It emits only
+the element set the Atlassian editor accepts: `<h1>`–`<h6>`, `<p>`, `<ul><li>`,
+`<table><thead><tr><th>` / `<tbody><tr><td>`, `<a href>`, `<strong>`, `<em>`,
+`<code>`, `<hr>`. Cell text is escaped before any of those are re-inserted, so
+a criterion quoting `<script>` posts as text rather than markup.
+
+Layout wrappers are not in the set. Jira refuses `<section data-type="layout-*">`
+and the comment fails rather than degrading, which is why the converter never
+emits one.
 
 ### If the target takes wiki markup
 
@@ -514,17 +689,21 @@ reserve `[text|url]` for the Source epic line.
 Plain text with bare URLs renders acceptably everywhere; wiki markup does not.
 Keep the section order and labels, drop the markup, and replace the tables.
 
-The coverage table is five columns wide and is the first thing to render badly on
+The coverage table is six columns wide and is the first thing to render badly on
 an ADF site or in a narrow comment pane. The fallback is one block per
 requirement, same fields, same order — never drop a field to make the table fit:
 
 ```
 AC1 (RHOAIENG-1234) "Requests for a tiered model are routed to the pool for that tier."
+  Outcome: Met
   Evidence: example-org/example-gateway#413, PR #520 (merged 2026-09-18)
   State: merged
   Coverage: Evidence found — PR #520 implements tier-based pool selection.
   Gap: Downstream qualification pending.
 ```
+
+This only arises for the full assessment, which is not posted. The summary has
+one four-column table of integers and survives every target.
 
 ### What survives conversion unchanged
 
