@@ -211,3 +211,5 @@ enter Claude's context, and an approved summary is posted to Jira.
 **Status.** Proof of concept. See [`docs/poc-plan.md`](docs/poc-plan.md) for
 scope, known gaps, and what would need to be true to use this on real
 requirements.
+
+**License.** Apache License 2.0 — see [`LICENSE`](LICENSE).
