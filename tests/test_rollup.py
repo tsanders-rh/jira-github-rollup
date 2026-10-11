@@ -235,7 +235,15 @@ def clause(text, kind="evidence-gap", **fields):
     return built
 
 
-class PipelineTest(unittest.TestCase):
+class PipelineHarness(unittest.TestCase):
+    """A faked world, a cache under a temp home, and one call per pipeline stage.
+
+    Separate from the tests that use it so that inheriting the fixture does
+    not inherit the scenarios. Five classes extend this; when they extended
+    `PipelineTest` instead, its 32 scenarios ran once per class - 128
+    duplicate runs, and 310 tests in 294s where there are now 182 in 126s.
+    """
+
     maxDiff = None
 
     def setUp(self):
@@ -310,7 +318,9 @@ class PipelineTest(unittest.TestCase):
         result = assemble_mod.build(assembly)
         return manifest, plan, result, result["report"]
 
-    # --- scenarios ------------------------------------------------------
+
+class PipelineTest(PipelineHarness):
+    """The situations listed at the top of this file, one test each."""
 
     def test_first_run_establishes_a_baseline_and_assesses_everything(self):
         _, plan, result, report = self.run_once(
@@ -1095,7 +1105,7 @@ class MetricTest(unittest.TestCase):
                          "not-planned and unrecorded reasons stay in the denominator")
 
 
-class TwoOutputTest(PipelineTest):
+class TwoOutputTest(PipelineHarness):
     """The contract between the full assessment and the Jira summary draft.
 
     Each test here is a way the pair could quietly disagree, or a way the
@@ -1471,7 +1481,7 @@ class TwoOutputTest(PipelineTest):
         self.assertNotIn("unverified 1→2", summary)
 
 
-class OverallAssessmentTest(PipelineTest):
+class OverallAssessmentTest(PipelineHarness):
     """The paragraph every rendering opens with.
 
     It is the one piece of prose a reader is guaranteed to read, and the only
@@ -1671,7 +1681,7 @@ class OverallAssessmentTest(PipelineTest):
         self.refuses({"text": "   "}, "has no text")
 
 
-class FollowUpInvestigationTest(PipelineTest):
+class FollowUpInvestigationTest(PipelineHarness):
     """The investigation that stops one read short.
 
     The failure is always the same shape. A criterion leaves a question open,
@@ -2090,7 +2100,7 @@ class FollowUpInvestigationTest(PipelineTest):
         self.assertEqual(again["sourceReads"], [ref])
 
 
-class EvidenceJoinTest(PipelineTest):
+class EvidenceJoinTest(PipelineHarness):
     """What a citation says, and what the pipeline says on its behalf.
 
     Which artifact is evidence for a criterion is the model's judgement and
