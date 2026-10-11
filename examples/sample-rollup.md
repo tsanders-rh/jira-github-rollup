@@ -88,8 +88,7 @@ inspected; that is not confirmation that none is required.
 - 2 source files read as a bounded follow-up, at the revisions named:
   `example-org/example-gateway@4a7e9c2:internal/config/loader.go`,
   `example-org/example-gateway@4a7e9c2:internal/config/config_test.go`. Both at
-  the #536 merge commit, not at the current default branch. Nothing else was
-  opened; 10 of the run's 12 reads were unused.
+  the #536 merge commit, not at the current default branch.
 - example-org/example-dlp is not readable from this account (404 on
   example-org/example-dlp#31), so AC4 could not be assessed in either direction.
 - **This investigation is incomplete.** One criterion (AC4) carries a clause

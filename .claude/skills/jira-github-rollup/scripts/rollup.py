@@ -177,18 +177,21 @@ def cmd_assemble(args):
 def _emit_outputs(result, args, notify=True):
     """Write the renderings, then the result JSON describing where they went.
 
-    An over-budget draft also says so on stderr. It is in `result.json` too,
-    but the draft gets shown for approval by somebody reading the summary and
-    not necessarily that file, and an overrun nothing downstream can fix is
-    exactly the thing that must not arrive silently.
+    Two things also say so on stderr: a draft over its word ceiling, and a run
+    that left follow-up reads unspent over evidence gaps that name a file.
+    Both are in `result.json` too, but the draft gets shown for approval by
+    somebody reading the summary and not necessarily that file, and a shortfall
+    nothing downstream can fix is exactly what must not arrive silently.
 
-    `notify` is off for `rerender`, which cannot act on it: the prose is the
-    stored prose, and telling someone re-rendering a published comment to
-    rewrite it before approval is advice about an approval that happened.
+    `notify` is off for `rerender`, which cannot act on either: the prose is
+    the stored prose and the reads happened or did not. Telling someone
+    re-rendering a published comment to go read a file is advice about a run
+    that finished.
     """
-    notice = result.get("summaryBudgetNotice")
-    if notice and notify:
-        print(f"notice: {notice}", file=sys.stderr)
+    if notify:
+        for key in ("followUpNotice", "summaryBudgetNotice"):
+            if result.get(key):
+                print(f"notice: {result[key]}", file=sys.stderr)
     report = result.pop("report")
     summary = result.pop("summary")
     # Always rendered, written only when asked for. It never goes to stdout:
@@ -294,6 +297,11 @@ def cmd_rerender(args):
         # since - a re-render must not describe a shallower investigation than
         # the one whose conclusions it is printing.
         "sourceReads": snapshot.get("sourceReads") or [],
+        # And the budget they came out of, so the re-render states the same
+        # "N left unspent" the reviewer saw rather than re-measuring a cache
+        # that may have been cleared. Absent on older snapshots, which the
+        # standing reports as an unrecorded budget rather than as zero.
+        "readBudget": snapshot.get("readBudget"),
         # Likewise the trend sentence: it was computed against a baseline that
         # is not in this file, so it is replayed rather than recomputed.
         "summaryTrend": snapshot.get("summaryTrend"),

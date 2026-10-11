@@ -889,3 +889,51 @@ the defect was that the overrun was silent, not that the file was written. And
 unchanged: the assembler never truncates a claim, never shortens the overall
 assessment and never drops a bullet. Deciding which sentences carry their
 weight is judgement, and it stays with the model.
+
+*2026-10-11* — **An unanswered question is reported against the budget there
+was to answer it with, and naming the file is counted rather than compelled.**
+The same 49-criterion run produced 22 `evidence-gap` clauses and spent 4 of
+its 12 follow-up reads. It did not stop because the budget ran out. Of the 22
+next actions, 5 named a file `source` could open and were never opened, 16
+named a subsystem — which `source` cannot take, by design — and 1 asked a
+person to decide. The run wrote itself a to-do list it could not act on and
+reported the leftover uncertainty as findings about the product. In a table
+cell "nobody checked this" and "this behaviour is missing" are the same cell.
+
+What went in, and what deliberately did not:
+
+- **The arithmetic, in code.** `clauses.follow_up_standing` reports open
+  evidence gaps, how many name a target, and how much read budget is unspent;
+  `assemble` prints it on stderr when reads were left over, both long
+  documents state the same sentence, and `cross_check` holds them to it. The
+  budget now reaches the assembly at all — `_source_reads` was taking
+  `ledger.reads` and discarding `ledger.remaining` — and is stored on the
+  snapshot so a re-render states what the reviewer saw.
+- **`nextRead` as an optional, counted field.** `{repo, path, revision}` — the
+  three arguments `source` takes. The assembler refuses a partial one, and one
+  naming a file the clause already inspected, but **never requires one**. The
+  issue proposed making it mandatory for any clause whose next action is a
+  read. Rejected: that condition is a model-declared flag, the same escape
+  hatch shape the evidence join had closed the day before, and the
+  unconditional version — a regex refusing a `nextAction` that names a path
+  the run never opened — has an incentive pointing the wrong way. Its cheapest
+  escape is a vaguer next action, and an unreadable instruction is worse for
+  the reader than the unread file. Counting makes specificity something the
+  report gives credit for: "22 open, 0 naming a target" is as visible as "5
+  open, 5 naming one, 8 unspent", and the first is its own finding.
+- **Resolve the subsystem to a path, in prose.** The issue routed the 16
+  concept-named gaps to `inspection-limitation`. Amended: a PR's changed-file
+  list is in scope, the manifest's sample is capped while the cache holds the
+  whole list, and `excerpt --kind pr-files --field files` is the documented
+  read of it. So a subsystem is usually one lookup from a path, and
+  reclassifying those as "could not be read" swaps one misreport for another —
+  a worse one, because `_clause_agreement` then makes the Jira summary declare
+  the investigation incomplete. Only what genuinely does not resolve within
+  the traversed set is a limitation. A clause asking a person to decide goes
+  to `unresolvedClauses`, which already exists for exactly that; no new
+  category was needed.
+
+Held, not decided: the 12-read budget. Enforcement makes it binding by
+construction at this scale, so the question is real — but `budget-spent` is
+now a reported condition, and the next large run will say whether 12 was the
+constraint instead of anyone guessing.

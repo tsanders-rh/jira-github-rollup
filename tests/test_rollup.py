@@ -2100,6 +2100,154 @@ class FollowUpInvestigationTest(PipelineHarness):
         self.assertEqual(again["sourceReads"], [ref])
 
 
+class FollowUpStandingTest(PipelineHarness):
+    """What was left unasked, against what there was budget to ask.
+
+    The failure: a run produced 22 evidence gaps, spent 4 of 12 reads, and
+    stopped - not because the budget ran out but because most of its own next
+    actions named a subsystem rather than a file, which `source` cannot take.
+    Five named a real file and were never opened. In a table cell "nobody
+    checked" and "this is missing" are the same cell.
+
+    Nothing here forces a read or requires a clause to name a target.
+    Requiring one would be a checker over prose whose cheapest escape is a
+    vaguer next action. What is enforced is only the arithmetic, and that it
+    says the same thing in both documents.
+    """
+
+    def gap(self, target=None, **fields):
+        fields.setdefault("inspected", [PR_A])
+        built = clause(
+            "membership in TieredPools does not establish runtime routing",
+            nextAction="read the router's request path at the merge commit",
+            **fields,
+        )
+        if target is not None:
+            built["nextRead"] = target
+        return built
+
+    TARGET = {"repo": ROUTER_REPO, "path": "pkg/router/handler.go", "revision": MERGE_A}
+
+    def run_with(self, clauses, assessments=None, **kwargs):
+        claim = assessment("AC1", "Partial evidence", [{"ref": PR_A}], "merged")
+        claim["uncoveredClauses"] = clauses
+        _, _, result, report = self.run_once(
+            REQUIREMENTS,
+            assessments or [claim, assessment("AC2", "No evidence found", [], "none")],
+            generated_at="2026-10-01T00:00:00Z",
+            **kwargs,
+        )
+        return result, report
+
+    # --- the arithmetic ---------------------------------------------------
+
+    def test_an_unread_target_is_counted_against_the_budget_left(self):
+        result, report = self.run_with([self.gap(self.TARGET)])
+        standing = result["followUpStanding"]
+        self.assertEqual(standing["openEvidenceGaps"], 1)
+        self.assertEqual(standing["namingATarget"], 1)
+        self.assertEqual(standing["remaining"], followup_mod.BUDGET)
+        self.assertEqual(standing["condition"], clauses_mod.READS_UNSPENT)
+        self.assertIn("1 of which names a file to read", report)
+        self.assertIn(f"of the run's {followup_mod.BUDGET} follow-up reads", report)
+
+    def test_a_gap_naming_no_target_is_still_visible_as_one(self):
+        """The dodge the middle number closes: drop the target, keep the gap."""
+        result, _ = self.run_with([self.gap()])
+        standing = result["followUpStanding"]
+        self.assertEqual((standing["openEvidenceGaps"], standing["namingATarget"]), (1, 0))
+        self.assertEqual(standing["condition"], clauses_mod.READS_UNSPENT)
+        self.assertIn("none of which names a file to read", result["followUpNotice"])
+        self.assertIn("changed-file list is in scope", result["followUpNotice"])
+
+    def test_a_run_with_nothing_open_says_nothing(self):
+        result, report = self.run_with(
+            [],
+            assessments=[assessment("AC1", "Evidence found", [{"ref": PR_A}], "merged"),
+                         assessment("AC2", "No evidence found", [], "none")],
+        )
+        self.assertEqual(
+            result["followUpStanding"]["condition"], clauses_mod.SETTLED
+        )
+        self.assertIsNone(result["followUpNotice"])
+        self.assertNotIn("open evidence gap", report)
+
+    def test_a_spent_budget_is_reported_as_the_limit_it_is(self):
+        """Evidence for calling what is left a limitation rather than a gap."""
+        for path in (ROUTER_FILE, ROUTER_TEST):
+            self.write_world()
+            followup_mod.read(
+                Gh(), cache_mod.Cache(KEY, reuse=True), ROUTER_REPO, path, MERGE_A, budget=2
+            )
+        result, report = self.run_with([self.gap(self.TARGET)])
+        # The ledger holds two reads; the budget the assembler reads is the
+        # default, so force the exhausted case through the stored shape.
+        standing = clauses_mod.follow_up_standing(
+            [{"uncoveredClauses": [self.gap(self.TARGET)]}],
+            {"limit": 2, "spent": 2, "remaining": 0},
+        )
+        self.assertEqual(standing["condition"], clauses_mod.BUDGET_SPENT)
+        self.assertIn("all 2 follow-up reads are spent", clauses_mod.standing_line(standing))
+        self.assertIsNone(clauses_mod.standing_notice(standing))
+        self.assertEqual(result["readBudget"]["spent"], 2)
+
+    def test_an_unrecorded_budget_is_not_reported_as_none_left(self):
+        """An older snapshot stored no budget. That is not a finding about it."""
+        standing = clauses_mod.follow_up_standing(
+            [{"uncoveredClauses": [self.gap()]}], None
+        )
+        self.assertEqual(standing["condition"], clauses_mod.UNKNOWN_BUDGET)
+        self.assertIn("is not recorded", clauses_mod.standing_line(standing))
+        self.assertIsNone(clauses_mod.standing_notice(standing))
+
+    # --- both documents say it, and say the same thing --------------------
+
+    def test_the_full_assessment_and_the_html_cannot_disagree_about_it(self):
+        result, report = self.run_with([self.gap(self.TARGET)])
+        line = clauses_mod.standing_line(result["followUpStanding"])
+        self.assertIn(line, report)
+        self.assertIn(htmlreport_mod.text(line), result["html"])
+
+    def test_a_document_that_drops_the_line_is_an_error_not_a_report(self):
+        standing = clauses_mod.follow_up_standing(
+            [{"uncoveredClauses": [self.gap(self.TARGET)]}],
+            {"limit": 12, "spent": 4, "remaining": 8},
+        )
+        problems = assemble_mod.cross_check(
+            "report with no standing", "summary", outcomes_mod.tally([]),
+            html_text="<p>html with no standing</p>", standing=standing,
+        )
+        self.assertTrue(
+            any("does not state the follow-up standing" in p for p in problems), problems
+        )
+
+    # --- what `nextRead` is refused for -----------------------------------
+
+    def test_a_target_missing_a_field_is_refused_naming_the_field(self):
+        with self.assertRaises(ValueError) as caught:
+            self.run_with([self.gap({"repo": ROUTER_REPO, "path": ROUTER_FILE})])
+        self.assertIn("names a next read missing revision", str(caught.exception))
+
+    def test_a_target_the_clause_already_read_is_refused(self):
+        ref = followup_mod.source_ref(ROUTER_REPO, ROUTER_FILE, MERGE_A)
+        with self.assertRaises(ValueError) as caught:
+            self.run_with([self.gap(
+                {"repo": ROUTER_REPO, "path": ROUTER_FILE, "revision": MERGE_A},
+                inspected=[ref],
+            )])
+        self.assertIn("already lists it as inspected", str(caught.exception))
+
+    def test_a_clause_is_never_required_to_name_a_target(self):
+        """The rule this deliberately does not have.
+
+        A gap whose answer nobody has located is a real finding. Refusing it
+        would only buy a vaguer `nextAction`, which is worse for the reader
+        than the unread file it was meant to catch.
+        """
+        result, _ = self.run_with([self.gap()])
+        self.assertEqual(result["outcomes"]["partial"], 1)
+
+
 class EvidenceJoinTest(PipelineHarness):
     """What a citation says, and what the pipeline says on its behalf.
 

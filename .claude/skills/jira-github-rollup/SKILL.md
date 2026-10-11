@@ -254,6 +254,15 @@ Both ends of that are guarded, because both are how a count becomes a lie:
   nothing — an unread file is not proof of missing functionality, and an absent
   test is not proof of an absent implementation — and refuses an evidence gap
   naming nothing inspected, because with nothing named it is a limitation.
+- **A next action you could not take is not a next action.** `source` takes an
+  exact path and does not search, so "read the metering emission path" settles
+  nothing. The path is a lookup away — `excerpt --kind pr-files --field files`
+  has the PR's whole changed-file list — so resolve the subsystem to a file,
+  read it, and reassess. Name the file in the clause's optional `nextRead`
+  (`repo`, `path`, `revision`) when you can; every run reports open evidence
+  gaps, how many name a target, and how many reads went unspent, and
+  `assemble` says so on stderr. A clause asking a *person* to decide belongs
+  in `unresolvedClauses`, not here.
 - **`confirmed-unmet` is the one outcome you may declare by hand**, via
   `"outcome": "confirmed-unmet"` plus `refutingEvidence` naming what shows the
   criterion is not satisfied. The assembler rejects the claim otherwise; it
@@ -459,6 +468,12 @@ append-only store. These are the ones still available to you:
   having access to it, and reporting the clause open anyway. If the source is
   in scope and within budget, open it; the reader is otherwise told the product
   is missing something when what was missing was a read.
+- **Writing a next action addressed to a tool that cannot take it.** "Read the
+  metering emission path" names a subsystem; `source` takes a path. Resolve it
+  against the changed-file list and read the file, or say that it does not
+  resolve within the traversed set and classify the clause an
+  `inspection-limitation`. A to-do list the run cannot act on becomes a gap
+  report about the product.
 - **Reading the default branch for a merged PR.** The question is what the code
   did at the revision the evidence was produced at. `--revision` takes the PR's
   `mergeCommit`, and a read at any other revision is about a different

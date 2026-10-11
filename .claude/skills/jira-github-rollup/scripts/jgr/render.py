@@ -673,6 +673,12 @@ def scope_section(assembly):
             f"at the {'revision' if len(reads) == 1 else 'revisions'} named: "
             f"{', '.join(f'`{ref}`' for ref in reads)}."
         )
+    # What was left unasked, beside what there was budget to ask. A reader
+    # cannot otherwise tell a question nobody could answer from one nobody
+    # put, and the two send them to different people.
+    standing = clauses_mod.standing_line(assembly.get("followUpStanding") or {})
+    if standing:
+        lines.append(f"- {standing}")
 
     # The one statement a reader must not have to infer. A criterion whose
     # clause could not be inspected looks, in the table, exactly like one that

@@ -474,6 +474,13 @@ def context_card(assembly, computed):
         ("Comparable movement", _movement(assembly, computed)),
         ("Child issues completed", metrics_mod.render_ratio(computed["children"])),
     ]
+    # What was left unasked, beside the budget there was to ask it with. The
+    # same sentence the full assessment carries - `assemble.cross_check`
+    # holds the two to it, because a reader comparing them on two screens is
+    # the person the drift would mislead.
+    standing = clauses_mod.standing_line(assembly.get("followUpStanding") or {})
+    if standing:
+        rows.append(("Follow-up standing", standing))
     out = ['<div class="card">', "<h3>Assessment context</h3>", '<dl class="facts">']
     for label, value in rows:
         out.append(f"<dt>{text(label)}</dt><dd>{text(value)}</dd>")

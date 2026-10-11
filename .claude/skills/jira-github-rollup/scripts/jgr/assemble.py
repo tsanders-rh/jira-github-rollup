@@ -195,11 +195,33 @@ def _source_reads(assembly):
     supplied = assembly.get("sourceReads")
     if supplied is not None:
         return list(supplied)
+    ledger = _ledger(assembly)
+    return [read["ref"] for read in ledger.reads] if ledger else []
+
+
+def _ledger(assembly):
     key = (assembly.get("jira") or {}).get("key")
     if not key:
-        return []
-    ledger = followup_mod.Ledger(cache_mod.Cache(key, reuse=True))
-    return [read["ref"] for read in ledger.reads]
+        return None
+    return followup_mod.Ledger(cache_mod.Cache(key, reuse=True))
+
+
+def _read_budget(assembly):
+    """How much of the follow-up budget this run used, or None if unknowable.
+
+    Supplied wins, as with the reads themselves: a re-render replays what the
+    snapshot stored rather than measuring a cache that may have been cleared
+    since. `None` where neither is available, because "no reads were left" and
+    "nobody recorded how many were left" are different statements and only one
+    of them is a finding.
+    """
+    supplied = assembly.get("readBudget")
+    if supplied is not None:
+        return dict(supplied)
+    ledger = _ledger(assembly)
+    if ledger is None:
+        return None
+    return {"limit": ledger.budget, "spent": ledger.spent, "remaining": ledger.remaining}
 
 
 def overall_problems(overall, requirements):
@@ -217,7 +239,8 @@ def overall_problems(overall, requirements):
     return problems
 
 
-def cross_check(report, summary_text, tallied, html_text=None, requirements=None, overall=None):
+def cross_check(report, summary_text, tallied, html_text=None, requirements=None, overall=None,
+                standing=None):
     """The outputs must not be able to disagree. This is where that is proved.
 
     They are rendered from one tally, so disagreement would be a bug rather
@@ -248,6 +271,32 @@ def cross_check(report, summary_text, tallied, html_text=None, requirements=None
     problems.extend(_html_problems(html_text, tallied, requirements))
     problems.extend(_overall_agreement(overall, report, summary_text, html_text))
     problems.extend(_clause_agreement(requirements, report, summary_text))
+    problems.extend(_standing_agreement(standing, report, html_text))
+    return problems
+
+
+def _standing_agreement(standing, report, html_text):
+    """One sentence of arithmetic, two documents, character for character.
+
+    The same rule as the overall assessment and for the same reason: both
+    renderings state how many questions were left open against how much
+    budget was left, and two copies of a sentence about counts drift on the
+    first edit while each still reads correctly on its own.
+    """
+    if not standing:
+        return []
+    line = clauses_mod.standing_line(standing)
+    if not line:
+        return []
+    problems = []
+    for name, rendered in (("full assessment", report), ("HTML full assessment", html_text)):
+        if rendered is None:
+            continue
+        carried = htmlreport_mod.text(line) if name.startswith("HTML") else line
+        if carried not in rendered:
+            problems.append(
+                f"the {name} does not state the follow-up standing the other does: {line}"
+            )
     return problems
 
 
@@ -415,6 +464,10 @@ def build(
     # citing a revision nobody opened. Resolved first because a cited source
     # read is checked against it.
     assembly["sourceReads"] = _source_reads(assembly)
+    # The budget beside the reads, so the report can say what was left unspent
+    # rather than only what was used. Both are stored, so a re-render states
+    # the same arithmetic the reviewer saw.
+    assembly["readBudget"] = _read_budget(assembly)
 
     # Each cited ref joined to what the run collected about it, before any of
     # it is merged, counted or rendered. See `jgr/evidence.py`: the model says
@@ -458,6 +511,12 @@ def build(
 
     computed = render_mod.compute_metrics(assembly)
     assembly["metrics"] = computed
+    # Open questions against unspent budget. Computed before anything renders
+    # because both documents state it and `cross_check` holds them to the same
+    # sentence; reported rather than refused, because whether a read would
+    # settle a clause is the model's judgement and only the arithmetic is not.
+    standing = clauses_mod.follow_up_standing(merged, assembly.get("readBudget"))
+    assembly["followUpStanding"] = standing
     # Resolved once, here, so the three renderings cannot each fall back
     # independently and end up stating three different positions.
     overall = summary_mod.overall_text(assembly, merged, tallied)
@@ -477,7 +536,9 @@ def build(
     # memory; the caller discards it if it was not asked for.
     html_text = htmlreport_mod.render(assembly, tallied)
 
-    disagreements = cross_check(report, summary_text, tallied, html_text, merged, overall)
+    disagreements = cross_check(
+        report, summary_text, tallied, html_text, merged, overall, standing
+    )
     if disagreements:
         raise ValueError("; ".join(disagreements))
 
@@ -496,6 +557,7 @@ def build(
             overall=assembly.get("overall"),
             narrative=assembly.get("narrative"),
             sourceReads=assembly.get("sourceReads"),
+            readBudget=assembly.get("readBudget"),
             summaryNarrative=assembly.get("summary"),
             trend=trend,
             prose={
@@ -548,7 +610,15 @@ def build(
         # a run with inspection limitations is one whose investigation is
         # unfinished, and that is a different thing from a run with gaps.
         "clauseKinds": clauses_mod.counts(merged),
+        # The arithmetic behind "it stopped before it had to": open evidence
+        # gaps, how many name a file, and how much read budget went unspent.
+        # Reported, never enforced - requiring every gap to name a target
+        # would be a checker over prose whose cheapest escape is a vaguer
+        # next action, and a vague next action is worse than an unread file.
+        "followUpStanding": standing,
+        "followUpNotice": clauses_mod.standing_notice(standing),
         "sourceReads": assembly.get("sourceReads") or [],
+        "readBudget": assembly.get("readBudget"),
         "outcomes": tallied["counts"],
         "deliveryConfidence": confidence,
         "snapshotPath": snapshot_path,

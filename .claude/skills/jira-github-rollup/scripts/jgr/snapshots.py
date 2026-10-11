@@ -183,6 +183,7 @@ def build(
     overall=None,
     narrative=None,
     sourceReads=None,
+    readBudget=None,
     summaryNarrative=None,
     trend=None,
     prose=None,
@@ -305,6 +306,11 @@ def build(
         # shallower than the one that was reviewed. It also makes the claim
         # auditable: the report says a file was read, and this says which.
         "sourceReads": sourceReads or None,
+        # And how many reads there were to spend. Stored for the same reason
+        # and from the same disposable ledger: without it a re-render cannot
+        # say whether the questions left open were left open by choice or by
+        # the budget, which is the whole of the distinction.
+        "readBudget": readBudget or None,
         "summaryNarrative": summaryNarrative or None,
         # The rendered trend sentence. It is computed against a baseline this
         # document does not contain, so it cannot be recomputed later.

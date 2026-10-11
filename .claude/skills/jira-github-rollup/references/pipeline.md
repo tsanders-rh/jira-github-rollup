@@ -320,6 +320,14 @@ cross-check always covers it, and is written only when asked for. It is never
 printed: a quarter of a megabyte of markup on stdout is exactly the kind of raw
 payload the cache exists to keep out of the conversation.
 
+`followUpStanding` is `{openEvidenceGaps, namingATarget, targets, limit, spent,
+remaining, condition}` — `no-open-evidence-gaps`, `reads-unspent`,
+`budget-spent` or `budget-unknown`. `reads-unspent` prints `followUpNotice` on
+stderr: questions were left open while there was budget to answer them.
+Reported, never refused — whether a read would settle a clause is a judgement,
+and only the arithmetic is not. The same sentence appears in the full
+assessment and the HTML, and the cross-check holds them to it.
+
 `summaryWordBudget` is `{floor, ceiling, within, condition, authored,
 refsPerBullet}`. `condition` is `within-budget`, `under-floor` or
 `over-ceiling`, and `authored` splits the count into the narrative bullets and
@@ -567,6 +575,10 @@ rules changed, when a previous run was wrong, or when the user asks for one.
 | `assemble` errors `is an inspection limitation with no constraint stated` | The clause says it could not be checked but not why | Name it: access, an unavailable revision, the follow-up budget, or another stated constraint |
 | `assemble` errors `is classified …, which is not one of` | A clause `kind` outside the three | Use `implementation-gap`, `evidence-gap` or `inspection-limitation`; a bare string is read as the second and then refused |
 | `assemble` errors `states no next action` | An open clause the reader cannot act on | Say what would settle it. This is the whole reason the clause is in the report |
+| `assemble` prints `notice: N of M open evidence gaps name a file to read` | Reads were left unspent over questions that name a target | Read them with `source` and reassess those criteria. A clause left open over a file nobody opened reports a missing read as missing work |
+| `assemble` prints `notice: N evidence gaps are open, none … names a file` | Nothing was localized to a path | Resolve the subsystems against the changed-file lists (`excerpt --kind pr-files --field files`). What genuinely does not resolve is an `inspection-limitation` |
+| `assemble` errors `names a next read missing …` | A `nextRead` with two fields of three | `source` takes `repo`, `path` and `revision`. A target it cannot be given is a sentence |
+| `assemble` errors `already lists it as inspected` | A `nextRead` pointing at a file the clause already read | One file at one revision returns the same bytes. Either the clause is settled, or the question needs a different file |
 | `source` returns `inspected: false`, `reason: budget` | 12 follow-up reads spent this run | Record an `inspection-limitation` on the clause, or re-run with `--budget` raised and say in the limitations section that you did |
 | `source` returns `inspected: false`, `reason: unreadable` at a revision | That path does not exist at that commit | Check the revision — it should be the PR's `mergeCommit`, not a branch. Do not substitute the default branch |
 | `assemble` errors `the Jira summary does not carry the outcome row` | The two renderings disagree | A renderer bug, not a data problem. Do not hand-edit either output to agree |

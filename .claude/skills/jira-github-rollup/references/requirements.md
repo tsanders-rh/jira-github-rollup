@@ -231,6 +231,58 @@ Two of these the assembler enforces, because both are violated silently:
 Every clause also needs a `nextAction` — the specific thing that would settle
 it. `revision` goes on any clause whose basis is a source read.
 
+#### The next action has to be one you could take
+
+An `evidence-gap` is open because a question stands. Before you record it, ask
+which of three things the question actually is:
+
+| The answer is | Then | And the clause |
+| --- | --- | --- |
+| In a file you can name | **Read it now** — `source`, at the revision the evidence was produced at | should not exist; reassess with what the read establishes |
+| In a subsystem you can name but a file you cannot | Resolve the subsystem to a path first; the PR's changed-file list is in scope and is how a named subsystem becomes a file | stands only if that fails |
+| Not in any source — somebody has to decide | Goes in `unresolvedClauses`, with who decides | does not belong in `uncoveredClauses` at all |
+
+The middle row is the one that goes wrong. "Read the metering emission path
+and say what it records for a rejected request" is not a next action: `source`
+takes an exact `--path` and does not search, by design. But the path is
+usually one lookup away —
+
+```bash
+python3 rollup.py excerpt --key <KEY> --ref example-org/example-gateway#520 \
+  --kind pr-files --field files --match 'meter|usage'
+```
+
+— and the manifest's changed-file sample is capped while the cache holds the
+whole list. A clause that names a subsystem is a lookup you did not do, not a
+limitation. Only when the subsystem genuinely does not resolve to a file
+within the traversed set is it an `inspection-limitation`, and then the
+constraint to state is that one: the code that would settle it is not in
+anything this run reached.
+
+**Where you can name the file, say so in the clause.** `nextRead` carries it
+as `{"repo", "path", "revision"}` — the three arguments `source` takes:
+
+```json
+{"text": "…", "kind": "evidence-gap", "inspected": ["example-org/example-rails#520"],
+ "nextAction": "read the request path and say what it does when the filter errors",
+ "nextRead": {"repo": "example-org/example-rails", "path": "pkg/proxy/handler.go",
+              "revision": "9f2c1ab"}}
+```
+
+It is **optional and never required**. A clause whose answer nobody has
+located is a real finding and says so by carrying no target; requiring one
+would only teach you to write a vaguer `nextAction`. What it is instead is
+counted: every run reports how many open evidence gaps name a target against
+how many follow-up reads went unspent, in the full assessment, the HTML and
+`result.json`, and `assemble` prints it on stderr when reads were left over.
+"Twenty-two open, none naming a target" is as visible as "five open, five
+naming one, eight reads unspent" — which is the point, because the first is
+the finding that nothing was localized.
+
+The assembler refuses a `nextRead` missing any of the three fields, and one
+naming a file the same clause already lists as `inspected`: one file at one
+revision returns the same bytes twice.
+
 The row's assessment is unchanged by this: `Partial evidence` when some clauses
 are supported and any remain open, whatever the open ones are classified as.
 Keep `Partial` conservative — a merged PR covering one clause of three is
@@ -398,7 +450,8 @@ One object per requirement in `diff.json`'s `reassess` list. `id` and
 objects: `text` and `kind` and `nextAction` always, plus the field its kind
 requires — `evidence` for `implementation-gap`, `inspected` for
 `evidence-gap`, `limitation` for `inspection-limitation`. `revision` wherever
-the basis is a source read. A bare string is read as an `evidence-gap` with
+the basis is a source read, and `nextRead` wherever you can name the file
+that would settle it. A bare string is read as an `evidence-gap` with
 nothing inspected, which the assembler then refuses by name; the upgrade path
 is an error message that says what to add, not a silent reclassification.
 
