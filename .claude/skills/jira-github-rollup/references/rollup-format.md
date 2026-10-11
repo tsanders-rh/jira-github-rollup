@@ -467,11 +467,22 @@ document that has room for them.
 ### The rest of the contract
 
 - **210–350 words** of prose, of which the overall assessment is 60–100; URLs
-  and the tables are scanned, not read, so neither counts. Over budget, the
-  renderer names fewer criteria per bullet. It never truncates narrative, never
-  shortens the overall assessment and never drops a bullet — `result.json`
-  reports `summaryWordBudget.within` and `overallWordBudget.within` instead,
-  because a half-finished claim is worse than a long one.
+  and the tables are scanned, not read, so neither counts. The renderer never
+  truncates narrative, never shortens the overall assessment and never drops a
+  bullet: a half-finished claim is worse than a long one. It reports
+  `summaryWordBudget.condition` — `within-budget`, `under-floor` or
+  `over-ceiling` — with the word split between your prose and the lines it
+  owns, and prints a notice on stderr for `over-ceiling`.
+
+  **`over-ceiling` is yours to fix, and the ceiling does not move.** Nothing
+  mechanical can meet it: measured on a 49-criterion draft, the whole range
+  between three references per bullet and none is four words, and the
+  one-reference version is the longest of the three because the collapsed tail
+  costs more than the names it replaces. 563 of those 724 words were prose. So
+  the three readability rules above are readability rules, not a compression
+  lever, and the bullets change character at scale instead — they give how many
+  criteria, on whose issues, of what kind, and point at the full assessment.
+  The complete lists live there.
 - **`_Scope:_` counts AC, SC and DoD separately** and never sums them. There is
   no feature-completion percentage in either output.
 - **1–2 targeted links per bullet**, with descriptive labels (`PR

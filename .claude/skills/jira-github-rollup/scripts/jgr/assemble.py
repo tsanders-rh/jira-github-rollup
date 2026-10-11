@@ -467,9 +467,10 @@ def build(
     # would silently print "Baseline established." over a summary that said
     # something else when it was reviewed.
     trend = assembly.get("summaryTrend") or summary_mod.trend_line(assembly, tallied)
-    summary_text = summary_mod.render(
+    drafted = summary_mod.draft(
         assembly, tallied, confidence, trend=trend, full_assessment_url=full_assessment_url
     )
+    summary_text = drafted["text"]
     # Rendered on every run whether or not `--html` asked for it, so that the
     # third rendering is cross-checked every time rather than only on the runs
     # that happen to write it out. It is string building over data already in
@@ -505,7 +506,7 @@ def build(
         )
         snapshot_path = snapshots_mod.save(snapshot, directory=directory)
 
-    words = summary_mod.word_count(summary_text)
+    words = drafted["words"]
     overall_words = summary_mod.word_count(overall)
     return {
         "report": report,
@@ -525,15 +526,22 @@ def build(
                              and str((assembly.get("overall") or {}).get("text") or "").strip()),
         },
         "summaryWords": words,
-        # Reported, not enforced. Under the floor usually means the bullets are
-        # a list of ids rather than a status; over the ceiling means nobody
-        # will read the last two bullets. Neither is worth refusing to render
-        # over, and truncating the model's prose to hit a number would be.
+        # Reported, not enforced - truncating the model's prose to hit a
+        # number would be the worse failure. But reported as a named
+        # `condition` rather than a boolean, with the word split that says
+        # which half is long, because `over-ceiling` is a thing to act on and
+        # a `false` buried in this file is a thing nobody reads. `rollup.py`
+        # prints `summary.budget_notice` for it, so it reaches the person
+        # about to approve the draft.
         "summaryWordBudget": {
-            "floor": summary_mod.WORD_FLOOR,
-            "ceiling": summary_mod.WORD_CEILING,
-            "within": summary_mod.WORD_FLOOR <= words <= summary_mod.WORD_CEILING,
+            "floor": drafted["floor"],
+            "ceiling": drafted["ceiling"],
+            "within": drafted["within"],
+            "condition": drafted["condition"],
+            "authored": drafted["authored"],
+            "refsPerBullet": drafted["refsPerBullet"],
         },
+        "summaryBudgetNotice": summary_mod.budget_notice(drafted),
         "narrativeClaims": len(assembly.get("narrative") or []),
         # Why the open clauses are open, counted. Reported so a caller can see
         # at a glance whether this run left questions it could have answered:

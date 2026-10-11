@@ -2271,6 +2271,136 @@ def multi_source(count_per_key=4, keys=("RHOAIENG-2201", "RHOAIENG-2202", "RHOAI
     return requirements
 
 
+class SummaryBudgetTest(unittest.TestCase):
+    """The one artifact that gets posted, and what happens when it is too long.
+
+    The failure this pins down was silent: a 49-criterion run produced a draft
+    at 89% over the ceiling, the renderer's compression loop shrank the one
+    thing that was not the problem, and the overrun reached the approval step
+    as a boolean in a file nobody reads. Nothing here truncates anything -
+    what changed is that the condition is named, says which half is long, and
+    is printed where the draft is read.
+    """
+
+    def world(self, criteria=49, bullet_words=120, overall_words=85, keys=6):
+        """A rollup the size the issue was filed about, with prose of a set length."""
+        sources = [f"RHOAIENG-22{n:02d}" for n in range(1, keys + 1)]
+        plan = ["met", "partial", "confirmed-unmet", "unverified"]
+        requirements = []
+        for index in range(criteria):
+            outcome = plan[index % len(plan)]
+            verdict = {"met": "Evidence found", "partial": "Partial evidence"}.get(
+                outcome, "No evidence found"
+            )
+            row = {
+                "id": f"AC{index + 1}", "sourceKey": sources[index % keys], "type": "AC",
+                "text": f"Criterion {index + 1}.", "assessment": verdict,
+                "evidence": [], "downstream": {"state": "unknown"},
+            }
+            if outcome in ("met", "partial"):
+                row["evidence"] = [{"ref": PR_A, "kind": "pr", "state": "merged"}]
+            if outcome == "confirmed-unmet":
+                row["outcome"] = "confirmed-unmet"
+                row["refutingEvidence"] = [{"ref": PR_A, "kind": "pr", "state": "merged"}]
+            requirements.append(row)
+
+        by_bullet = {"evidence-established": "met", "remaining-work": "unverified",
+                     "decisions-needed": "confirmed-unmet", "next-actions": "unverified"}
+        narrative = []
+        for slug, outcome in by_bullet.items():
+            rows = [r for r in requirements if outcomes_mod.classify(r) == outcome][:8]
+            narrative.append({
+                "bullet": slug, "text": " ".join(["word"] * bullet_words), "links": [],
+                "refs": [{"sourceKey": r["sourceKey"], "id": r["id"]} for r in rows],
+            })
+        picked = {
+            field: [{"sourceKey": r["sourceKey"], "id": r["id"]}
+                    for r in requirements if outcomes_mod.classify(r) in wanted][:3]
+            for field, wanted in (("establishes", ("met", "partial")),
+                                  ("unmet", ("confirmed-unmet",)),
+                                  ("unverified", ("unverified",)))
+        }
+        assembly = {
+            "generatedAt": "2026-10-11T00:00:00Z",
+            "jira": {"key": sources[0], "summary": "Tiered quota",
+                     "site": "https://jira.example.com"},
+            "manifest": {"children": [], "epics": [], "observed": True},
+            "requirements": requirements, "mappings": [], "narrative": narrative,
+            "overall": dict(picked, text=" ".join(["word"] * overall_words)),
+        }
+        return assembly, requirements
+
+    def draft(self, **kwargs):
+        assembly, requirements = self.world(**kwargs)
+        tallied = outcomes_mod.tally(requirements)
+        confidence = outcomes_mod.confidence(assembly, requirements, tallied)
+        return summary_mod.draft(assembly, tallied, confidence, trend="Baseline established.")
+
+    def test_a_draft_inside_the_budget_is_named_within_budget(self):
+        state = self.draft(criteria=8, bullet_words=38, keys=2)
+        self.assertEqual(state["condition"], summary_mod.WITHIN_BUDGET)
+        self.assertTrue(state["within"])
+        self.assertIsNone(summary_mod.budget_notice(state))
+
+    def test_an_overrun_is_a_named_condition_not_only_a_false(self):
+        state = self.draft()
+        self.assertGreater(state["words"], summary_mod.WORD_CEILING)
+        self.assertEqual(state["condition"], summary_mod.OVER_CEILING)
+        self.assertFalse(state["within"])
+
+    def test_the_overrun_says_which_half_of_the_draft_is_long(self):
+        """"The draft is long" and "what you wrote is long" lead to different moves."""
+        state = self.draft(bullet_words=120, overall_words=85)
+        self.assertEqual(state["authored"]["narrative"], 480)
+        self.assertEqual(state["authored"]["overall"], 85)
+
+    def test_the_notice_names_the_room_the_bullets_actually_have_left(self):
+        state = self.draft()
+        notice = summary_mod.budget_notice(state)
+        fixed = state["words"] - state["authored"]["narrative"] - state["authored"]["overall"]
+        room = summary_mod.WORD_CEILING - state["authored"]["overall"] - fixed
+        self.assertIn(f"{state['words']} words against a 350-word ceiling", notice)
+        self.assertIn(f"they have {room} to work with", notice)
+        self.assertIn("assemble again before showing the draft for approval", notice)
+
+    def test_nothing_the_model_wrote_is_shortened_to_fit(self):
+        """The whole point of reporting rather than enforcing."""
+        assembly, requirements = self.world()
+        tallied = outcomes_mod.tally(requirements)
+        confidence = outcomes_mod.confidence(assembly, requirements, tallied)
+        state = summary_mod.draft(assembly, tallied, confidence, trend="Baseline established.")
+        for entry in assembly["narrative"]:
+            self.assertIn(entry["text"], state["text"])
+        self.assertIn(assembly["overall"]["text"], state["text"])
+        for _, label in summary_mod.BULLETS:
+            self.assertIn(f"- **{label}:**", state["text"])
+
+    def test_the_reference_cap_is_applied_once_rather_than_retried(self):
+        """Retrying at two and one references bought four words and cost two renders.
+
+        Measured on this fixture the one-reference draft is the *longest* of
+        the three, because "and 9 more - 4 on RHOAIENG-2204, 3 on
+        RHOAIENG-2205" costs more than the two names it replaces. So an
+        over-ceiling draft still names three criteria per bullet: the cap is a
+        readability rule, and it was never a compression lever.
+        """
+        state = self.draft()
+        self.assertEqual(state["condition"], summary_mod.OVER_CEILING)
+        self.assertEqual(state["refsPerBullet"], summary_mod.MAX_REFS_PER_BULLET)
+        remaining = next(
+            line for line in state["text"].splitlines()
+            if line.startswith("- **Remaining work:**")
+        )
+        named = len(re.findall(r"RHOAIENG-\d+ AC\d+\]", remaining))
+        self.assertEqual(named, summary_mod.MAX_REFS_PER_BULLET)
+
+    def test_a_short_draft_is_named_under_floor_and_gets_no_notice(self):
+        """A thin summary is visible in the draft itself; an overrun is not."""
+        state = self.draft(criteria=4, bullet_words=4, overall_words=20, keys=1)
+        self.assertEqual(state["condition"], summary_mod.UNDER_FLOOR)
+        self.assertIsNone(summary_mod.budget_notice(state))
+
+
 class SummaryRenderTest(unittest.TestCase):
     """The rules that keep the Jira summary readable at 49 criteria.
 
@@ -2962,6 +3092,9 @@ class CliTest(unittest.TestCase):
             capture_output=True, text=True, env=self.env, input=stdin,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
+        # Kept for the tests that care what the command said as well as what
+        # it wrote: the word-budget notice goes to stderr, not into the draft.
+        self.stderr = proc.stderr
         return proc.stdout
 
     def path(self, name):
@@ -3026,6 +3159,75 @@ class CliTest(unittest.TestCase):
 
         measured = json.loads(self.run_cli("measure", self.path("manifest.json")))
         self.assertGreater(measured["total"]["bytes"], 0)
+
+    def test_an_over_budget_draft_says_so_where_the_draft_is_read(self):
+        """`summaryWordBudget.within: false` reached the approval step silently.
+
+        The run still finishes and still writes the draft - refusing to render
+        was never the fix. What is new is that the command says the draft is
+        over the ceiling, on stderr, beside the summary somebody is about to
+        be asked to approve.
+        """
+        self.run_cli("collect", "--key", KEY, "--epics", json.dumps([EPIC]),
+                     "--out", self.path("manifest.json"))
+        with open(self.path("requirements.json"), "w") as handle:
+            json.dump(REQUIREMENTS, handle)
+        self.run_cli("diff", "--manifest", self.path("manifest.json"),
+                     "--requirements", self.path("requirements.json"),
+                     "--out", self.path("diff.json"))
+        with open(self.path("assessments.json"), "w") as handle:
+            json.dump([assessment("AC1", "Evidence found", [{"ref": PR_A}], "merged"),
+                       assessment("AC2", "No evidence found", [], "none")], handle)
+        prose = " ".join(["word"] * 200)
+        with open(self.path("narrative.json"), "w") as handle:
+            json.dump(
+                [{"bullet": slug, "text": prose, "links": [],
+                  "refs": [{"sourceKey": KEY, "id": "AC1" if slug == "evidence-established"
+                            else "AC2"}]}
+                 for slug in ("evidence-established", "remaining-work")],
+                handle,
+            )
+        with open(self.path("assembly.json"), "w") as handle:
+            json.dump({"jira": {"key": KEY, "summary": "Tiered quota", "status": "In Progress"},
+                       "mappings": [{"ref": EPIC, "url": f"https://github.com/{EPIC}"}],
+                       "summary": "Upstream work is underway."}, handle)
+
+        self.run_cli(
+            "assemble", "--in", self.path("assembly.json"),
+            "--manifest", self.path("manifest.json"), "--diff", self.path("diff.json"),
+            "--requirements", self.path("requirements.json"),
+            "--assessments", self.path("assessments.json"),
+            "--narrative", self.path("narrative.json"),
+            "--report", self.path("report.md"), "--summary", self.path("summary.md"),
+            "--out", self.path("result.json"),
+        )
+        self.assertIn("notice: the Jira summary draft is", self.stderr)
+        self.assertIn("words against a 350-word ceiling", self.stderr)
+
+        with open(self.path("result.json")) as handle:
+            result = json.load(handle)
+        self.assertEqual(result["summaryWordBudget"]["condition"], "over-ceiling")
+        self.assertFalse(result["summaryWordBudget"]["within"])
+        self.assertGreaterEqual(result["summaryWordBudget"]["authored"]["narrative"], 400)
+        self.assertIn("rewrite", result["summaryBudgetNotice"].lower())
+
+        # The notice is for the person approving, never for the Jira reader:
+        # it must not reach the thing that gets posted.
+        with open(self.path("summary.md")) as handle:
+            summary = handle.read()
+        self.assertNotIn("ceiling", summary)
+        self.assertIn(prose, summary)
+
+        # Re-rendering the stored draft reports the condition and says nothing.
+        # The prose is the stored prose; "rewrite before approval" is advice
+        # about an approval that already happened.
+        self.run_cli("rerender", "--snapshot", result["snapshotPath"],
+                     "--summary", self.path("again.md"), "--out", self.path("again.json"))
+        self.assertNotIn("notice:", self.stderr)
+        with open(self.path("again.json")) as handle:
+            self.assertEqual(
+                json.load(handle)["summaryWordBudget"]["condition"], "over-ceiling"
+            )
 
     def test_a_pr_description_is_collected_and_excerptable(self):
         """`excerpt --kind pr --field body` is the documented read of a PR.

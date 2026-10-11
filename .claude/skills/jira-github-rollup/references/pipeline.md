@@ -313,12 +313,21 @@ and link the work covering SC6", not a claim about an epic nobody traversed.
 | `--snapshot-dir` | Overrides the location |
 
 `result.json` carries `outcomes` (the four counts), `deliveryConfidence`,
-`summaryWords`, `summaryWordBudget`, `narrativeClaims`, `snapshotPath`, the
-three ratios, `reused`/`assessed`, and `htmlBytes` — with `htmlPath` when
-`--html` named one. The HTML is rendered on every run so the cross-check always
-covers it, and is written only when asked for. It is never printed: a quarter
-of a megabyte of markup on stdout is exactly the kind of raw payload the cache
-exists to keep out of the conversation.
+`summaryWords`, `summaryWordBudget`, `summaryBudgetNotice`, `narrativeClaims`,
+`snapshotPath`, the three ratios, `reused`/`assessed`, and `htmlBytes` — with
+`htmlPath` when `--html` named one. The HTML is rendered on every run so the
+cross-check always covers it, and is written only when asked for. It is never
+printed: a quarter of a megabyte of markup on stdout is exactly the kind of raw
+payload the cache exists to keep out of the conversation.
+
+`summaryWordBudget` is `{floor, ceiling, within, condition, authored,
+refsPerBullet}`. `condition` is `within-budget`, `under-floor` or
+`over-ceiling`, and `authored` splits the count into the narrative bullets and
+the overall assessment — the half the model can shorten. `over-ceiling` also
+prints `summaryBudgetNotice` on stderr, because the draft reaches a person for
+approval and `result.json` may not. **It is an instruction to rewrite and
+re-assemble, not a statistic**; nothing in the renderer can act on it, and the
+run still finishes and still writes the draft.
 
 Seven ways this command refuses rather than emitting something wrong:
 
@@ -395,6 +404,11 @@ Evidence is not re-joined here. The stored items were resolved against the
 manifest of the run that made them; the manifest reconstructed from a snapshot
 is thinner than that one, so re-deriving would re-judge a reviewed document
 against a poorer record of the world.
+
+`summaryWordBudget.condition` is still reported, and the `over-ceiling` notice
+is not printed. The prose is the stored prose and this command cannot change
+it; telling someone re-rendering a published comment to rewrite it before
+approval is advice about an approval that already happened.
 
 The prose comes back with it. A snapshot stores `summaryNarrative` (the full
 assessment's Summary paragraph) and `narrative` (the Jira summary's bullet
@@ -563,7 +577,8 @@ rules changed, when a previous run was wrong, or when the user asks for one.
 | `assemble` errors `rests on …, which nothing inspected supports` | An `evidence-established` claim over an `unverified` row | Either the claim belongs under another bullet, or the row was assessed too conservatively. Fix whichever is wrong |
 | `assemble` errors `claims more than a traversal can show` | An unscoped existence claim, in prose or in a `gap` | Scope it: "no upstream work in the traversed set is linked to …" |
 | `assemble` errors `says N met but the tally … says M` | The prose and the table disagree | The tally is right by construction. Fix the sentence |
-| `result.summaryWordBudget.within` is false | The draft is outside 210–350 words | Reported, not enforced. Tighten the narrative rather than letting the renderer cut a claim in half |
+| `assemble` prints `notice: the Jira summary draft is N words against a 350-word ceiling` | `summaryWordBudget.condition` is `over-ceiling` | Rewrite the bullets and assemble again **before** showing the draft. The notice says how many words they have left; nothing in the renderer can recover them |
+| `result.summaryWordBudget.condition` is `under-floor` | The draft is under 210 words | Reported, not enforced, and no re-run needed. Usually the bullets are a list of ids rather than a status |
 | `result.overallWordBudget.within` is false | The overall assessment is outside 60–100 words | Reported, not enforced. Short usually means no position was taken; long means it stops being the thing read first |
 | `result.overallWordBudget.supplied` is false | Nobody wrote an overall assessment, so all three renderings carry the mechanical fallback | Write one. The fallback restates the tally and says in its last sentence that no position was taken |
 | `promote` errors `a Jira comment id is required` | Promoting without a successful post | Correct. Leave the snapshot a draft until the comment lands and returns an id |

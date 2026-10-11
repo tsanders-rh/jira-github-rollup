@@ -842,3 +842,50 @@ of the world.
 timestamp cannot reach a trend classification: the classifier skips rows whose
 assessment is unchanged, and a row whose assessment changed was reassessed
 fresh this run and therefore carries joined values.
+
+*2026-10-11* — **The summary ceiling stays at 350 words, and no mechanical
+lever is pretending to meet it.** A 49-criterion run produced a 661-word draft
+— 89% over — and the overrun reached the approval step as
+`summaryWordBudget.within: false` in a file nobody reads.
+
+Three options were on the table for what the summary does at scale: collapse
+the bullets' enumeration past some criteria count, scale the ceiling with
+scope, or keep the ceiling fixed and make the rewrite a step. The first was
+the preference going in, because it reuses the collapse rule the coverage
+table already applies above 12 requirements. Measurement killed it. On a
+reconstruction of that run, the entire range between three criterion
+references per bullet and none is **four words** — 724 to 720 — and the
+one-reference version is the *longest* of the three at 729, because "and 9
+more — 4 on RHOAIENG-2204, 3 on RHOAIENG-2205" costs more than the two names
+it replaces. 563 of the 724 words were prose the model wrote: 478 in the four
+bullets, 85 in the overall assessment. There is no collapse rule that recovers
+311 words from 161 words of renderer-controlled text.
+
+So the three readability rules in `summary.py` are readability rules and were
+never a compression lever, and the `for cap in (3, 2, 1)` loop that re-rendered
+the whole document hoping one of them would fit is gone. The cap is applied
+once. What changed instead:
+
+- `summaryWordBudget.condition` is `within-budget`, `under-floor` or
+  `over-ceiling`, with `authored` splitting the count into the model's prose
+  and the lines the renderer owns — because "the draft is long" and "what you
+  wrote is long" lead to different next moves.
+- `over-ceiling` prints a notice on **stderr**, since the draft is shown for
+  approval by somebody reading the summary and not necessarily `result.json`.
+  The notice derives the room the bullets actually have left in *this* draft
+  (ceiling, less the overall assessment, less the fixed lines) rather than
+  quoting a constant, because the fixed lines grow with the run.
+- `SKILL.md` makes it a step: rewrite and re-assemble **before** showing the
+  draft, and do not bring an `over-ceiling` draft to the approval step at all.
+  At 49 criteria the four bullets have about a hundred words between them, so
+  a bullet gives the shape of the finding — how many, whose, of what kind —
+  and sends the reader to the full assessment.
+
+Rejected along with option 1: scaling the ceiling with scope. The posted
+comment would get longer exactly as the reader's patience gets shorter, and
+the full assessment already exists for the detail. Also rejected: refusing to
+render an over-budget draft. The run should finish and the draft should exist;
+the defect was that the overrun was silent, not that the file was written. And
+unchanged: the assembler never truncates a claim, never shortens the overall
+assessment and never drops a bullet. Deciding which sentences carry their
+weight is judgement, and it stays with the model.

@@ -333,9 +333,18 @@ the full assessment.
 
 `result.json` reports `outcomes`, `deliveryConfidence`, `summaryWords`,
 `summaryWordBudget`, `narrativeClaims`, `snapshotPath`, and `htmlBytes` with
-`htmlPath` when `--html` was given. The word budget is reported, not enforced —
-the renderer names fewer criteria to fit, and never truncates a claim.
-`references/rollup-format.md` documents all three contracts.
+`htmlPath` when `--html` was given. `references/rollup-format.md` documents all
+three contracts.
+
+**`summaryWordBudget.condition` of `over-ceiling` is a step, not a statistic.**
+Rewrite the bullets and assemble again *before* you show the draft; `assemble`
+prints how many words they actually have left. Nothing in the renderer will fix
+it — it never truncates a claim, and naming fewer criteria per bullet is worth a
+handful of words at any scale. At 49 criteria the four bullets have about a
+hundred words between them, so a bullet gives the **shape** of the finding —
+how many, whose, of what kind — and sends the reader to the full assessment
+instead of enumerating it. `under-floor` needs no re-run: it usually means the
+bullets are a list of ids rather than a status.
 
 **`--html` writes a file; it does not create a link.** The document is
 standalone — embedded CSS and script, no fonts, no CDN, no network at runtime —
@@ -376,6 +385,10 @@ than as a draft.
 Show the summary and ask whether to post **that text**. Offer to revise it;
 every revision is a new draft needing its own yes. Nothing below happens
 without one, and what gets posted is the summary, never the full assessment.
+
+Do not bring a draft here whose `summaryWordBudget.condition` is
+`over-ceiling`. Asking for approval of something nobody will read to the end is
+asking for the wrong yes.
 
 `addOrEditJiraIssueComment` takes `commentBody` as **Markdown by default**, with
 `contentFormat: "html"` as the alternative — it is not a wiki-markup input. Send

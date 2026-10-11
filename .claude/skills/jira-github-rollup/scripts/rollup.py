@@ -174,8 +174,21 @@ def cmd_assemble(args):
     _emit_outputs(result, args)
 
 
-def _emit_outputs(result, args):
-    """Write the renderings, then the result JSON describing where they went."""
+def _emit_outputs(result, args, notify=True):
+    """Write the renderings, then the result JSON describing where they went.
+
+    An over-budget draft also says so on stderr. It is in `result.json` too,
+    but the draft gets shown for approval by somebody reading the summary and
+    not necessarily that file, and an overrun nothing downstream can fix is
+    exactly the thing that must not arrive silently.
+
+    `notify` is off for `rerender`, which cannot act on it: the prose is the
+    stored prose, and telling someone re-rendering a published comment to
+    rewrite it before approval is advice about an approval that happened.
+    """
+    notice = result.get("summaryBudgetNotice")
+    if notice and notify:
+        print(f"notice: {notice}", file=sys.stderr)
     report = result.pop("report")
     summary = result.pop("summary")
     # Always rendered, written only when asked for. It never goes to stdout:
@@ -317,7 +330,7 @@ def cmd_rerender(args):
         resolve_evidence=False,
     )
     result["renderedFrom"] = args.snapshot
-    _emit_outputs(result, args)
+    _emit_outputs(result, args, notify=False)
 
 
 def cmd_excerpt(args):

@@ -44,6 +44,20 @@ from . import util
 WORD_FLOOR = 210
 WORD_CEILING = 350
 
+# What the budget came out as, named rather than left as a boolean.
+#
+# The distinction that matters is not "did it fit" but "can anything here make
+# it fit", and the answer to the second is no. Nothing in this module shortens
+# model prose, and the one lever it does have - naming fewer criteria per
+# bullet - is worth a handful of words at any scale, because the collapsed
+# tail that replaces a name is about as long as the name. So `over-ceiling` is
+# a condition the model has to act on by rewriting, and it is reported where
+# the person about to approve the draft will see it rather than only in a
+# field of `result.json`.
+WITHIN_BUDGET = "within-budget"
+UNDER_FLOOR = "under-floor"
+OVER_CEILING = "over-ceiling"
+
 # The overall assessment paragraph. Reported rather than enforced, like the
 # draft budget: truncating the model's prose to hit a number would damage the
 # one part of the document that carries the position.
@@ -895,11 +909,26 @@ def _mix_line(requirements):
 
 
 def render(assembly, tallied, confidence, trend=None, full_assessment_url=None):
-    """The Jira summary draft, as Markdown.
+    """The Jira summary draft, as Markdown. See `draft` for what it came out at."""
+    return draft(assembly, tallied, confidence, trend, full_assessment_url)["text"]
+
+
+def draft(assembly, tallied, confidence, trend=None, full_assessment_url=None):
+    """The Jira summary draft, and what the word budget came out as.
 
     `full_assessment_url` is included only when the caller can name a durable,
     reader-accessible location. A local path is not one, and `links.py`
     refuses it.
+
+    The budget is reported, never met by force. This used to re-render the
+    whole document at three, two and one reference per bullet hoping one of
+    them would fit; measured on a 49-criterion draft the three versions span
+    four words, and the one-reference version is the *longest* of them,
+    because "and 9 more - 4 on RHOAIENG-2204, 3 on RHOAIENG-2205" costs more
+    than the two names it replaced. The cap is a readability rule and is
+    applied once as one. What makes a draft long is the prose, and shortening
+    that is the model's judgement; what this returns is the fact that it has
+    to.
     """
     trend = trend or trend_line(assembly, tallied)
     jira = assembly.get("jira") or {}
@@ -929,27 +958,98 @@ def render(assembly, tallied, confidence, trend=None, full_assessment_url=None):
         "| " + " | ".join(str(counts[name]) for name in outcomes_mod.OUTCOMES) + " |",
     ]
 
-    # Shrink the named detail until the prose fits the budget, never dropping a
-    # bullet outright - a summary missing "Decisions needed" is a different
-    # document, not a shorter one. Narrative is never truncated: it is the
-    # model's claim, and a half-sentence claim is worse than a long one.
+    # Never drops a bullet outright - a summary missing "Decisions needed" is
+    # a different document, not a shorter one - and never truncates narrative:
+    # it is the model's claim, and a half-sentence claim is worse than a long
+    # one.
     overall = overall_text(assembly, requirements, tallied)
 
-    for cap in (MAX_REFS_PER_BULLET, 2, 1):
-        ledger = _Ledger(site, limit=cap)
-        bullets = []
-        for slug, label in BULLETS:
-            text = _narrative_bullet(slug, narrative, requirements, ledger)
-            if text is None:
-                text = _FALLBACK[slug](grouped, requirements, ledger)
-            bullets.append(f"- **{label}:** {text}")
-        body = _assemble(
-            title, source, confidence_line, tallied, table, bullets,
-            assembly, trend, manifest, requirements, full_assessment_url, overall,
-        )
-        if word_count(body) <= WORD_CEILING:
-            break
-    return body
+    ledger = _Ledger(site, limit=MAX_REFS_PER_BULLET)
+    bullets = []
+    for slug, label in BULLETS:
+        text = _narrative_bullet(slug, narrative, requirements, ledger)
+        if text is None:
+            text = _FALLBACK[slug](grouped, requirements, ledger)
+        bullets.append(f"- **{label}:** {text}")
+    body = _assemble(
+        title, source, confidence_line, tallied, table, bullets,
+        assembly, trend, manifest, requirements, full_assessment_url, overall,
+    )
+
+    words = word_count(body)
+    condition = budget_condition(words)
+    return {
+        "text": body,
+        "words": words,
+        "floor": WORD_FLOOR,
+        "ceiling": WORD_CEILING,
+        # Kept beside `condition` because callers and a stored `result.json`
+        # already read it, and derived from it so the two cannot disagree.
+        "within": condition == WITHIN_BUDGET,
+        "condition": condition,
+        "refsPerBullet": MAX_REFS_PER_BULLET,
+        # Split out because it is the half the model can do something about,
+        # and because "the draft is long" and "what you wrote is long" lead to
+        # different next moves.
+        "authored": {
+            "narrative": word_count(
+                " ".join(
+                    str(entry.get("text") or "")
+                    for entry in narrative
+                    if isinstance(entry, dict) and entry.get("bullet") in BULLET_SLUGS
+                )
+            ),
+            "overall": word_count(overall),
+        },
+    }
+
+
+def budget_condition(words):
+    """Which of the three the draft is. `over-ceiling` is the one to act on."""
+    if words > WORD_CEILING:
+        return OVER_CEILING
+    if words < WORD_FLOOR:
+        return UNDER_FLOOR
+    return WITHIN_BUDGET
+
+
+def budget_notice(state):
+    """What to tell the person about to approve an over-budget draft, or None.
+
+    Only the ceiling gets a notice. Under the floor usually means the bullets
+    are a list of ids rather than a status, which a reader can see for
+    themselves in the draft in front of them; over the ceiling is the one that
+    is invisible at a glance and that nothing downstream will fix.
+    """
+    if state.get("condition") != OVER_CEILING:
+        return None
+    authored = state.get("authored") or {}
+    narrative = authored.get("narrative") or 0
+    overall = authored.get("overall") or 0
+    # Everything the renderer owns: the header lines, the caption, the
+    # collapsed reference suffixes, the trend and the scope caveat. Derived
+    # rather than stated as a constant because it grows with the run, and the
+    # number the model needs is how much room is left in *this* draft.
+    fixed = max(state.get("words", 0) - narrative - overall, 0)
+    room = WORD_CEILING - overall - fixed
+    notice = (
+        f"the Jira summary draft is {state['words']} words against a {WORD_CEILING}-word "
+        f"ceiling. Nothing here can shorten it: a claim is never truncated, and naming "
+        f"fewer criteria per bullet is worth a handful of words. The four bullets are "
+        f"{narrative} words of your prose; beside an overall assessment of {overall} and "
+        f"{fixed} words of header, trend and reference lines, they have "
+    )
+    notice += (
+        f"{room} to work with. "
+        if room > 0
+        else "nothing to work with - the overall assessment and the fixed lines fill the "
+             "ceiling on their own, so shorten the overall assessment too. "
+    )
+    return notice + (
+        "Rewrite them and assemble again before showing the draft for approval. At this "
+        "scale a bullet gives the shape of the finding and sends the reader to the full "
+        "assessment rather than enumerating it."
+    )
 
 
 _FALLBACK = {
