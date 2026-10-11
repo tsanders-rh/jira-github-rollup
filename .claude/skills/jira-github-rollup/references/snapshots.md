@@ -233,7 +233,7 @@ Field notes that are easy to get wrong:
 | `access[]` | Every source that could not be read, and every source that previously could not be and now can. An empty array is a claim that everything was readable. |
 | `requirements[].text` | Verbatim, exactly as the Jira states it. This is half the match key; a tidied-up copy breaks matching against every future run. |
 | `requirements[].id` | Recorded for display only. **Never used for matching** — see below. |
-| `evidence[].at` | Merge date for a PR, close date for an issue. `null` when genuinely unavailable; do not substitute the run time. |
+| `evidence[].kind`, `[].state`, `[].at` | Joined from the manifest by `jgr/evidence.py` when the assessment was made, never transcribed: merge date for a merged PR, close date for a closed issue, creation date for anything still open. Absent when nothing collected records one — a source read has no date here, because the ledger's date is when the file was read. Stored resolved so a re-render reproduces the reviewed document rather than re-deriving it. |
 | `downstream.state` | `confirmed`, `pending`, or `unknown`. Nothing else. |
 | `rulesVersion` | The assessment rules the stored judgements were made under. A baseline written under a different value is reassessed in full rather than reused. Bump it in `jgr/snapshots.py` whenever a change to `references/requirements.md` would change a verdict. |
 | `scope.observed` | `false` when no epic could be read at all — no mapping, or every mapping inaccessible. This is what makes the child count render `unknown` instead of a zero nobody measured, so it must never be set `true` optimistically. |

@@ -91,7 +91,8 @@ func TestValidateRejectsOverflowAny(t *testing.T) {
 """
 
 
-def issue(ref, title, state="OPEN", reason=None, body="", closed=None, updated="2026-09-01T00:00:00Z", labels=None):
+def issue(ref, title, state="OPEN", reason=None, body="", closed=None, updated="2026-09-01T00:00:00Z",
+          created="2026-08-01T00:00:00Z", labels=None):
     repo, number = ref.split("#")
     return {
         "number": int(number),
@@ -102,18 +103,24 @@ def issue(ref, title, state="OPEN", reason=None, body="", closed=None, updated="
         "labels": labels or [],
         "assignees": [],
         "url": f"https://github.com/{repo}/issues/{number}",
+        # What dates the issue as evidence while it is open, and what dates it
+        # once it is not. The assembler joins one of the two onto every cited
+        # ref; nothing is typed in beside the ref.
+        "createdAt": created,
         "closedAt": closed,
         "updatedAt": updated,
     }
 
 
-def pull(ref, state="OPEN", merged=None, updated="2026-09-01T00:00:00Z", commit=None):
+def pull(ref, state="OPEN", merged=None, updated="2026-09-01T00:00:00Z",
+         created="2026-08-01T00:00:00Z", commit=None):
     repo, number = ref.split("#")
     return {
         "number": int(number),
         "title": f"PR {number}",
         "state": "MERGED" if merged else state,
         "isDraft": False,
+        "createdAt": created,
         "mergedAt": merged,
         # The revision a follow-up read of this PR's code has to use. Only a
         # merged PR has one, which is the same thing the collector records.
@@ -246,6 +253,23 @@ class PipelineTest(unittest.TestCase):
         with open(self.world_path, "w", encoding="utf-8") as handle:
             json.dump(self.world, handle)
 
+    def cite_pr(self, ref=PR_B, child=CHILD_B, merged="2026-09-20T09:00:00Z"):
+        """Put a second pull request where the traversal will find it.
+
+        Evidence refs are joined against the manifest, so a ref a test invents
+        is refused exactly as a mistyped one is. A test that wants to cite a
+        second PR has to add it to the world first - which is the behaviour
+        under test as much as it is setup.
+        """
+        self.world["prs"][ref] = pull(ref, merged=merged)
+        self.world["timeline"].setdefault(child, []).append(crossref(ref))
+        self.world["prFiles"][ref] = {
+            "changedFiles": 1, "files": [{"path": "pkg/meter/usage.go"}],
+            "closingIssuesReferences": [],
+        }
+        self.world["checks"][ref] = [{"name": "unit", "bucket": "pass"}]
+        return ref
+
     def collect(self, epics=(EPIC,), key=KEY):
         self.write_world()
         collector = collect_mod.Collector(key, gh=Gh(), cache=cache_mod.Cache(key))
@@ -338,15 +362,12 @@ class PipelineTest(unittest.TestCase):
         differ computes covers it. A `pending` carried forward unchanged is a
         months-old "qualification outstanding" reported as if it were current.
         """
+        self.cite_pr()
         self.run_once(
             REQUIREMENTS,
             [
-                assessment("AC1", "Evidence found",
-                           [{"ref": PR_A, "kind": "pr", "state": "merged",
-                             "at": "2026-09-18T09:00:00Z"}], "merged", "pending"),
-                assessment("AC2", "Evidence found",
-                           [{"ref": PR_B, "kind": "pr", "state": "merged",
-                             "at": "2026-09-18T09:00:00Z"}], "merged", "confirmed"),
+                assessment("AC1", "Evidence found", [{"ref": PR_A}], "merged", "pending"),
+                assessment("AC2", "Evidence found", [{"ref": PR_B}], "merged", "confirmed"),
             ],
             generated_at="2026-10-01T00:00:00Z",
         )
@@ -357,15 +378,12 @@ class PipelineTest(unittest.TestCase):
 
     def test_an_unknown_downstream_is_still_reusable(self):
         """Nobody looked then and nobody looked now; repeating that is honest."""
+        self.cite_pr()
         self.run_once(
             REQUIREMENTS,
             [
-                assessment("AC1", "Evidence found",
-                           [{"ref": PR_A, "kind": "pr", "state": "merged",
-                             "at": "2026-09-18T09:00:00Z"}], "merged", "unknown"),
-                assessment("AC2", "Evidence found",
-                           [{"ref": PR_B, "kind": "pr", "state": "merged",
-                             "at": "2026-09-18T09:00:00Z"}], "merged", "unknown"),
+                assessment("AC1", "Evidence found", [{"ref": PR_A}], "merged", "unknown"),
+                assessment("AC2", "Evidence found", [{"ref": PR_B}], "merged", "unknown"),
             ],
             generated_at="2026-10-01T00:00:00Z",
         )
@@ -385,12 +403,8 @@ class PipelineTest(unittest.TestCase):
         self.run_once(
             REQUIREMENTS,
             [
-                assessment("AC1", "Evidence found",
-                           [{"ref": PR_A, "kind": "pr", "state": "merged",
-                             "at": "2026-09-18T09:00:00Z"}], "merged", "confirmed"),
-                assessment("AC2", "Evidence found",
-                           [{"ref": CHILD_C, "kind": "issue",
-                             "at": "2026-09-18T09:00:00Z"}], "merged", "confirmed"),
+                assessment("AC1", "Evidence found", [{"ref": PR_A}], "merged", "confirmed"),
+                assessment("AC2", "Evidence found", [{"ref": CHILD_C}], "merged", "confirmed"),
             ],
             generated_at="2026-10-01T00:00:00Z",
         )
@@ -415,17 +429,15 @@ class PipelineTest(unittest.TestCase):
         self.world["issues"][dependency] = {
             "title": "Meter API", "body": "", "state": "OPEN", "stateReason": "",
             "url": f"https://github.com/{dependency.replace('#', '/issues/')}",
+            "createdAt": "2026-08-01T00:00:00Z",
             "updatedAt": "2026-09-01T00:00:00Z", "closedAt": None,
         }
+        self.cite_pr()
         self.run_once(
             REQUIREMENTS,
             [
-                assessment("AC1", "Evidence found",
-                           [{"ref": dependency, "kind": "issue", "at": "2026-09-18T09:00:00Z"}],
-                           "merged", "confirmed"),
-                assessment("AC2", "Evidence found",
-                           [{"ref": PR_B, "kind": "pr", "state": "merged",
-                             "at": "2026-09-18T09:00:00Z"}], "merged", "confirmed"),
+                assessment("AC1", "Evidence found", [{"ref": dependency}], "merged", "confirmed"),
+                assessment("AC2", "Evidence found", [{"ref": PR_B}], "merged", "confirmed"),
             ],
             generated_at="2026-10-01T00:00:00Z",
         )
@@ -447,11 +459,9 @@ class PipelineTest(unittest.TestCase):
         self.run_once(
             requirements,
             [
-                assessment("AC1", "Evidence found", [{"ref": CHILD_A, "kind": "issue",
-                                                      "at": "2026-09-18T10:00:00Z"}], "merged", "confirmed"),
+                assessment("AC1", "Evidence found", [{"ref": CHILD_A}], "merged", "confirmed"),
                 assessment("AC2", "No evidence found", [], "none"),
-                assessment("AC3", "Evidence found", [{"ref": CHILD_C, "kind": "issue",
-                                                      "at": "2026-09-10T00:00:00Z"}], "merged", "confirmed"),
+                assessment("AC3", "Evidence found", [{"ref": CHILD_C}], "merged", "confirmed"),
             ],
             generated_at="2026-10-01T00:00:00Z",
         )
@@ -555,8 +565,7 @@ class PipelineTest(unittest.TestCase):
         self.run_once(
             REQUIREMENTS,
             [
-                assessment("AC1", "Evidence found", [{"ref": CHILD_C, "kind": "issue",
-                                                      "at": "2026-09-10T00:00:00Z"}], "merged", "confirmed"),
+                assessment("AC1", "Evidence found", [{"ref": CHILD_C}], "merged", "confirmed"),
                 assessment("AC2", "No evidence found", [], "none"),
             ],
             generated_at="2026-10-01T00:00:00Z",
@@ -1150,20 +1159,9 @@ class TwoOutputTest(PipelineTest):
         self.assertIn("absence of evidence is 'unverified'", str(caught.exception))
 
     def test_confirmed_unmet_is_honoured_when_something_is_cited(self):
-        declared = assessment(
-            "AC2", "No evidence found",
-            [{"ref": PR_B, "kind": "pr", "state": "merged", "at": "2026-09-20T09:00:00Z"}],
-            "merged",
-        )
+        declared = assessment("AC2", "No evidence found", [{"ref": self.cite_pr()}], "merged")
         declared["outcome"] = "confirmed-unmet"
-        result, _, summary = self.both(
-            assessments=[
-                assessment("AC1", "Evidence found",
-                           [{"ref": PR_A, "kind": "pr", "state": "merged",
-                             "at": "2026-09-18T09:00:00Z"}], "merged"),
-                declared,
-            ]
-        )
+        result, _, summary = self.both(assessments=[self._merged(), declared])
         self.assertEqual(result["outcomes"]["confirmed-unmet"], 1)
         self.assertEqual(result["outcomes"]["unverified"], 0)
         self.assertEqual(sum(result["outcomes"].values()), 2)
@@ -1247,11 +1245,7 @@ class TwoOutputTest(PipelineTest):
         flight is the failure: a reader skims Remaining work as a list of
         things that will arrive, and this is a thing that will not.
         """
-        declared = assessment(
-            "AC2", "No evidence found",
-            [{"ref": PR_B, "kind": "pr", "state": "merged", "at": "2026-09-20T09:00:00Z"}],
-            "merged",
-        )
+        declared = assessment("AC2", "No evidence found", [{"ref": self.cite_pr()}], "merged")
         declared["outcome"] = "confirmed-unmet"
         _, _, summary = self.both(assessments=[self._merged(), declared])
         decisions = self.bullet(summary, "Decisions needed")
@@ -1266,11 +1260,7 @@ class TwoOutputTest(PipelineTest):
         before anyone has asked the question the finding actually raises -
         whether the criterion still describes what is intended to ship.
         """
-        declared = assessment(
-            "AC2", "No evidence found",
-            [{"ref": PR_B, "kind": "pr", "state": "merged", "at": "2026-09-20T09:00:00Z"}],
-            "merged",
-        )
+        declared = assessment("AC2", "No evidence found", [{"ref": self.cite_pr()}], "merged")
         declared["outcome"] = "confirmed-unmet"
         _, _, summary = self.both(assessments=[self._merged(), declared])
         for prescription in ("reopen", "re-scope", "revise the criterion"):
@@ -1352,14 +1342,13 @@ class TwoOutputTest(PipelineTest):
         self.assertIn("an unverified row is not evidence that the work is missing", summary)
 
     def test_delivery_confidence_is_not_inferred_from_the_counts(self):
+        self.cite_pr()
         result, _, summary = self.both(
             assessments=[
-                assessment("AC1", "Evidence found",
-                           [{"ref": PR_A, "kind": "pr", "state": "merged",
-                             "at": "2026-09-18T09:00:00Z"}], "merged", downstream="confirmed"),
-                assessment("AC2", "Evidence found",
-                           [{"ref": PR_B, "kind": "pr", "state": "merged",
-                             "at": "2026-09-19T09:00:00Z"}], "merged", downstream="confirmed"),
+                assessment("AC1", "Evidence found", [{"ref": PR_A}], "merged",
+                           downstream="confirmed"),
+                assessment("AC2", "Evidence found", [{"ref": PR_B}], "merged",
+                           downstream="confirmed"),
             ]
         )
         self.assertEqual(result["outcomes"]["met"], 2)
@@ -1493,8 +1482,7 @@ class OverallAssessmentTest(PipelineTest):
     what a read of issues and pull requests can establish at all.
     """
 
-    MERGED = {"ref": PR_A, "kind": "pr", "state": "merged", "at": "2026-09-18T09:00:00Z"}
-    REFUTING = {"ref": PR_B, "kind": "pr", "state": "merged", "at": "2026-09-20T09:00:00Z"}
+    MERGED = {"ref": PR_A}
 
     def met(self, requirement_id="AC1"):
         return assessment(requirement_id, "Evidence found", [self.MERGED], "merged")
@@ -1503,7 +1491,8 @@ class OverallAssessmentTest(PipelineTest):
         return assessment(requirement_id, "No evidence found", [], "none")
 
     def contradicted(self, requirement_id="AC2"):
-        declared = assessment(requirement_id, "No evidence found", [self.REFUTING], "merged")
+        declared = assessment(requirement_id, "No evidence found", [{"ref": self.cite_pr()}],
+                              "merged")
         declared["outcome"] = "confirmed-unmet"
         return declared
 
@@ -2070,9 +2059,7 @@ class FollowUpInvestigationTest(PipelineTest):
         self.read()
         _, _, result, report = self.run_once(
             REQUIREMENTS,
-            [assessment("AC1", "Evidence found",
-                        [{"ref": PR_A, "kind": "pr", "state": "merged",
-                          "at": "2026-09-18T09:00:00Z"}], "merged", "confirmed"),
+            [assessment("AC1", "Evidence found", [{"ref": PR_A}], "merged", "confirmed"),
              assessment("AC2", "No evidence found", [], "none")],
             generated_at="2026-10-01T00:00:00Z",
         )
@@ -2096,8 +2083,167 @@ class FollowUpInvestigationTest(PipelineTest):
              "summary": stored["summaryNarrative"] or "Upstream work is partly complete.",
              "sourceReads": stored["sourceReads"], "generatedAt": "2026-10-02T00:00:00Z"},
             write_snapshot=False,
+            # What `rerender` does: the stored evidence was joined when the
+            # assessment was made, against a manifest this call does not have.
+            resolve_evidence=False,
         )
         self.assertEqual(again["sourceReads"], [ref])
+
+
+class EvidenceJoinTest(PipelineTest):
+    """What a citation says, and what the pipeline says on its behalf.
+
+    Which artifact is evidence for a criterion is the model's judgement and
+    stays with it. What that artifact *is* - merged or open, and when - the
+    collector already fetched, and the failure here is the one that happens
+    when it is written down a second time: a merge time rounded to the minute
+    is a different instant, and `at` is what decides whether the trend
+    section calls a changed row work that landed or work nobody had found.
+    """
+
+    def stored(self, assessments):
+        """The requirement rows as they were snapshotted, by id."""
+        _, _, result, _ = self.run_once(
+            REQUIREMENTS, assessments, generated_at="2026-10-01T00:00:00Z"
+        )
+        snapshot, problem = snapshots_mod.load(result["snapshotPath"])
+        self.assertIsNone(problem)
+        return {row["id"]: row for row in snapshot["requirements"]}
+
+    def refused(self, evidence, verdict="Evidence found", state="merged"):
+        """The message `assemble` refuses one cited list with."""
+        with self.assertRaises(ValueError) as caught:
+            self.run_once(
+                REQUIREMENTS,
+                [assessment("AC1", verdict, evidence, state),
+                 assessment("AC2", "No evidence found", [], "none")],
+                generated_at="2026-10-01T00:00:00Z",
+            )
+        return str(caught.exception)
+
+    def unverified(self):
+        return assessment("AC2", "No evidence found", [], "none")
+
+    # --- what the join fills in -----------------------------------------
+
+    def test_a_bare_ref_is_all_a_citation_needs(self):
+        rows = self.stored(
+            [assessment("AC1", "Evidence found", [{"ref": PR_A}], "merged"), self.unverified()]
+        )
+        self.assertEqual(
+            rows["AC1"]["evidence"],
+            [{"ref": PR_A, "kind": "pr", "state": "merged", "at": "2026-09-18T09:00:00Z"}],
+            "kind, state and at come from the manifest, not from the assessment",
+        )
+
+    def test_an_issue_is_dated_by_its_close_and_an_open_one_by_its_creation(self):
+        """`updatedAt` is not a date for evidence: a comment would move it."""
+        rows = self.stored(
+            [assessment("AC1", "Evidence found", [{"ref": CHILD_A}], "merged"),
+             assessment("AC2", "Partial evidence", [{"ref": CHILD_B}], "in review")]
+        )
+        self.assertEqual(
+            rows["AC1"]["evidence"][0],
+            {"ref": CHILD_A, "kind": "issue", "state": "closed", "at": "2026-09-18T10:00:00Z"},
+        )
+        self.assertEqual(
+            rows["AC2"]["evidence"][0],
+            {"ref": CHILD_B, "kind": "issue", "state": "open", "at": "2026-08-01T00:00:00Z"},
+        )
+
+    def test_refuting_evidence_is_joined_the_same_way(self):
+        """The list behind the report's least forgiving claim gets no exemption."""
+        declared = assessment("AC2", "No evidence found", [], "none")
+        declared["outcome"] = "confirmed-unmet"
+        declared["refutingEvidence"] = [{"ref": self.cite_pr()}]
+        rows = self.stored(
+            [assessment("AC1", "Evidence found", [{"ref": PR_A}], "merged"), declared]
+        )
+        self.assertEqual(
+            rows["AC2"]["refutingEvidence"],
+            [{"ref": PR_B, "kind": "pr", "state": "merged", "at": "2026-09-20T09:00:00Z"}],
+        )
+
+    # --- what it refuses -------------------------------------------------
+
+    def test_a_ref_the_traversal_never_saw_is_refused_by_name(self):
+        message = self.refused([{"ref": "example-org/example-quota#999"}])
+        self.assertIn("example-org/example-quota#999", message)
+        self.assertIn("is not an artifact this run traversed", message)
+
+    def test_declaring_a_kind_does_not_smuggle_an_untraversed_ref_in(self):
+        """Otherwise the way to cite a CI check is also the way around the check."""
+        message = self.refused([{"ref": "example-org/example-quota#999", "kind": "pr"}])
+        self.assertIn("is not an artifact this run traversed", message)
+
+    def test_a_timestamp_rounded_to_the_minute_is_refused_rather_than_merged(self):
+        """The bug this exists for: 09:00:00Z transcribed from a merge at 09:00:34Z."""
+        self.world["prs"][PR_A] = pull(PR_A, merged="2026-09-18T09:00:34Z", commit=MERGE_A)
+        message = self.refused([{"ref": PR_A, "at": "2026-09-18T09:00:00Z"}])
+        self.assertIn("2026-09-18T09:00:00Z", message)
+        self.assertIn("2026-09-18T09:00:34Z", message)
+
+    def test_a_conflicting_state_is_refused_in_both_directions(self):
+        message = self.refused([{"ref": PR_A, "state": "open"}])
+        self.assertIn("states state='open' but what was collected says 'merged'", message)
+
+    def test_the_same_instant_written_another_way_is_not_a_conflict(self):
+        """Nobody acted on the notation; the stored value is the collected one."""
+        rows = self.stored(
+            [assessment("AC1", "Evidence found",
+                        [{"ref": PR_A, "at": "2026-09-18T09:00:00+00:00"}], "merged"),
+             self.unverified()]
+        )
+        self.assertEqual(rows["AC1"]["evidence"][0]["at"], "2026-09-18T09:00:00Z")
+
+    def test_a_field_nothing_collected_records_is_refused_too(self):
+        """A declared dependency is inspected shallowly, so it may have no date.
+
+        Accepting a supplied one here would leave the single field the trend
+        reads as the one field nobody checked.
+        """
+        dependency = "example-org/example-meter#900"
+        self.world["issues"][CHILD_A]["body"] = f"Routing work. Depends on {dependency}"
+        self.world["issues"][dependency] = {
+            "title": "Meter API", "body": "", "state": "OPEN", "stateReason": "",
+            "url": "https://github.com/example-org/example-meter/issues/900",
+        }
+        message = self.refused([{"ref": dependency, "at": "2026-09-18T09:00:00Z"}])
+        self.assertIn("nothing collected for it records a value for at", message)
+
+    # --- evidence that is not a traversed artifact ------------------------
+
+    def test_a_ci_check_states_its_own_kind_and_is_left_as_written(self):
+        rows = self.stored(
+            [assessment("AC1", "Evidence found",
+                        [{"ref": PR_A}, {"ref": "e2e-routing", "kind": "check", "state": "pass"}],
+                        "tested"),
+             self.unverified()]
+        )
+        self.assertEqual(
+            rows["AC1"]["evidence"][1], {"ref": "e2e-routing", "kind": "check", "state": "pass"}
+        )
+
+    def test_a_check_name_with_no_kind_is_refused_rather_than_guessed_at(self):
+        message = self.refused([{"ref": "e2e-routing"}], state="tested")
+        self.assertIn("nothing collected this run describes it", message)
+
+    def test_a_source_read_is_joined_from_the_ledger_and_carries_no_date(self):
+        """The ledger dates the read, which is now, not the code it read."""
+        self.write_world()
+        followup_mod.read(
+            Gh(), cache_mod.Cache(KEY, reuse=True), ROUTER_REPO, ROUTER_FILE, MERGE_A
+        )
+        ref = followup_mod.source_ref(ROUTER_REPO, ROUTER_FILE, MERGE_A)
+        rows = self.stored(
+            [assessment("AC1", "Evidence found", [{"ref": ref}], "merged"), self.unverified()]
+        )
+        self.assertEqual(rows["AC1"]["evidence"][0], {"ref": ref, "kind": "source"})
+
+    def test_a_source_read_that_never_happened_is_refused(self):
+        ref = followup_mod.source_ref(ROUTER_REPO, ROUTER_TEST, MERGE_A)
+        message = self.refused([{"ref": ref}])
+        self.assertIn("names a source read this run did not make", message)
 
 
 def multi_source(count_per_key=4, keys=("RHOAIENG-2201", "RHOAIENG-2202", "RHOAIENG-2203")):

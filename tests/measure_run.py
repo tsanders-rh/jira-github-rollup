@@ -126,9 +126,8 @@ def run(home, world=None):
         )
         assessments = (
             [
-                fixture.assessment("AC1", "Evidence found",
-                                   [{"ref": fixture.PR_A, "kind": "pr", "state": "merged",
-                                     "at": "2026-09-18T09:00:00Z"}], "merged", "confirmed"),
+                fixture.assessment("AC1", "Evidence found", [{"ref": fixture.PR_A}],
+                                   "merged", "confirmed"),
                 fixture.assessment("AC2", "No evidence found", [], "none"),
             ]
             if label == "full"

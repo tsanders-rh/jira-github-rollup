@@ -14,6 +14,7 @@ __all__ = [
     "collect",
     "convert",
     "diff",
+    "evidence",
     "ghclient",
     "measure",
     "metrics",

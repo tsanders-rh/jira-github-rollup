@@ -800,3 +800,45 @@ another.
 `RULES_VERSION` moved to `2026-10-10`. Stored assessments were made under rules
 that let an unread source become a gap, so reusing them would carry exactly the
 judgements this change exists to revisit.
+
+*2026-10-11* — **An evidence citation is a ref; the pipeline supplies the rest.**
+A 49-criterion run produced 64 citations over 13 distinct refs, each carrying
+`kind`, `state` and `at` typed out by hand — and four of the thirteen `at`
+values were the manifest's merge times rounded to the minute. Harmless in that
+report, and not harmless in general: `at` is what the trend section compares
+against the baseline to separate implementation progress from newly discovered
+evidence, so a rounded copy can flip which of those two claims a reader is
+given, with nothing downstream able to notice.
+
+This is the `CLAUDE.md` split applied to a field at a time. *Which* artifact is
+evidence for a criterion is a judgement and stays in prose. What that artifact
+is — a PR or an issue, merged or open, and when it landed — is a mechanical
+fact the collector already fetched, so `jgr/evidence.py` joins it: from the
+manifest for an `owner/repo#123` ref, and from this run's source-read ledger
+for an `owner/repo@revision:path` one. Anything outside the traversal, a CI job
+name being the usual case, declares its own `kind` and is left as written.
+
+Two consequences were settled rather than left open. A ref that resolves to
+nothing is **refused by name** instead of being accepted with whatever fields
+came with it — it is a typo or it is work nobody traversed, and both need a
+person. And a supplied field that disagrees with the collected one is refused
+rather than merged in either direction: picking a winner hides the case where
+the manifest is not the document the assessment thought it was reading.
+Declaring `kind: pr` on an untraversed ref is refused too, or the escape hatch
+for a CI check would also be the hole in the check.
+
+`createdAt` was added to the collected fields so `at` can mean *when the
+artifact became the evidence it is* — merged, else closed, else opened.
+`updatedAt` was the only alternative already on hand and is the wrong one: a
+comment on an open PR would date the evidence to this week and report a reply
+as work that landed.
+
+`rerender` does not re-join. The stored items were resolved against the
+manifest of the run that made them, and the manifest rebuilt from a snapshot is
+thinner, so re-deriving would re-judge a reviewed document from a poorer record
+of the world.
+
+`RULES_VERSION` did **not** move. No verdict changes, and a stored rounded
+timestamp cannot reach a trend classification: the classifier skips rows whose
+assessment is unchanged, and a row whose assessment changed was reassessed
+fresh this run and therefore carries joined values.

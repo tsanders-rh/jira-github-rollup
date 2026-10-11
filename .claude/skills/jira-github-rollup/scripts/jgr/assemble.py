@@ -17,6 +17,7 @@ import re
 
 from . import cache as cache_mod
 from . import clauses as clauses_mod
+from . import evidence as evidence_mod
 from . import followup as followup_mod
 from . import htmlreport as htmlreport_mod
 from . import links as links_mod
@@ -384,17 +385,47 @@ def _count_claims(summary_text, tallied):
     return problems
 
 
-def build(assembly, directory=None, write_snapshot=True, full_assessment_url=None):
+def build(
+    assembly,
+    directory=None,
+    write_snapshot=True,
+    full_assessment_url=None,
+    resolve_evidence=True,
+):
     """Render the outputs from one merge, and, unless suppressed, snapshot it.
 
     One merge, one tally, three renderings. The full assessment, the Jira
     summary and the HTML are never built from separate passes over the data -
     that is the only way to guarantee the counts in the comment match the
     counts in the evidence table nobody re-reads.
+
+    `resolve_evidence` is off for exactly one caller: `rerender` replays a
+    stored assessment, which was joined when it was made. Re-deriving it from
+    a manifest rebuilt out of the snapshot would re-judge a reviewed document
+    against a thinner record of the world than the one it was written from.
     """
     generated_at = assembly.get("generatedAt") or util.iso(util.utcnow())
     assembly["generatedAt"] = generated_at
     diff = assembly.get("diff") or {}
+
+    # What the follow-up reads actually were, taken from the ledger rather
+    # than from a list the model wrote. A read that happened and was not
+    # declared would otherwise leave the report claiming no source was
+    # inspected, and a declared read that never happened would leave it
+    # citing a revision nobody opened. Resolved first because a cited source
+    # read is checked against it.
+    assembly["sourceReads"] = _source_reads(assembly)
+
+    # Each cited ref joined to what the run collected about it, before any of
+    # it is merged, counted or rendered. See `jgr/evidence.py`: the model says
+    # what the evidence is, the pipeline says what it is made of.
+    if resolve_evidence:
+        joined, mismatched = evidence_mod.resolve_assessments(
+            assembly.get("assessments"), assembly.get("manifest"), assembly["sourceReads"]
+        )
+        if mismatched:
+            raise ValueError("; ".join(mismatched))
+        assembly["assessments"] = joined
 
     merged, missing, problems = merge(
         assembly.get("requirements") or [], assembly.get("assessments") or [], diff, generated_at
@@ -427,12 +458,6 @@ def build(assembly, directory=None, write_snapshot=True, full_assessment_url=Non
 
     computed = render_mod.compute_metrics(assembly)
     assembly["metrics"] = computed
-    # What the follow-up reads actually were, taken from the ledger rather
-    # than from a list the model wrote. A read that happened and was not
-    # declared would otherwise leave the report claiming no source was
-    # inspected, and a declared read that never happened would leave it
-    # citing a revision nobody opened.
-    assembly["sourceReads"] = _source_reads(assembly)
     # Resolved once, here, so the three renderings cannot each fall back
     # independently and end up stating three different positions.
     overall = summary_mod.overall_text(assembly, merged, tallied)

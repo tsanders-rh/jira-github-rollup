@@ -221,10 +221,18 @@ validator checks establishes which **configurations** are rejected, never what
 happens at runtime. That is a second clause and a second read.
 
 Emit `assessments.json`, one object per reassessed requirement: `id`,
-`sourceKey`, `assessment`, `coverageDetail`, `evidence` (each with `ref`,
-`kind`, `state`, `at`), `evidenceState`, `gap`, `downstream`. Anything you leave
-out of both `assessments.json` and `diff.json`'s `reuse` is an error, not an
-`Unable to assess` — the assembler refuses to invent a verdict.
+`sourceKey`, `assessment`, `coverageDetail`, `evidence`, `evidenceState`,
+`gap`, `downstream`. Anything you leave out of both `assessments.json` and
+`diff.json`'s `reuse` is an error, not an `Unable to assess` — the assembler
+refuses to invent a verdict.
+
+**An evidence item is `{"ref": …}` and nothing else.** `kind`, `state` and
+`at` are joined from the manifest, or from this run's source reads for a
+`owner/repo@revision:path` ref; a ref neither one carries is refused by name,
+and a field you state that disagrees with what was collected is refused rather
+than merged. Anything outside the traversal — a CI job name — states its own
+`kind`. Transcribing a merge time by hand is how a rounded timestamp silently
+flips a trend row between "work landed" and "we only just found it".
 
 The four coverage assessments become the four outcomes the reader counts, and
 the mapping is fixed in code: `Evidence found → met`, `Partial evidence →

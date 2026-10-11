@@ -375,8 +375,8 @@ One object per requirement in `diff.json`'s `reassess` list. `id` and
     "coverageDetail": "PR #520 implements tier-to-pool selection; CI job e2e-routing passed on the merge commit and asserts pool assignment per tier",
     "evidenceState": "tested",
     "evidence": [
-      {"ref": "example-org/example-gateway#413", "kind": "issue", "at": "2026-09-18T10:00:00Z"},
-      {"ref": "example-org/example-gateway#520", "kind": "pr", "state": "merged", "at": "2026-09-18T09:14:00Z"}
+      {"ref": "example-org/example-gateway#413"},
+      {"ref": "example-org/example-gateway#520"}
     ],
     "gap": "Downstream qualification pending; see below",
     "downstream": {"state": "pending", "detail": "implementation merged to main on 2026-09-18; no downstream build inspected"},
@@ -406,11 +406,37 @@ Both clause lists default to `[]`. Omitting them asserts that every clause of
 the criterion is supported and settled, so leave them out only when that is
 what you mean.
 
-`at` is load-bearing: the trend section classifies a changed assessment as
-implementation progress, newly discovered evidence, or undetermined by comparing
-these timestamps against the baseline's. An evidence item with no usable date
-produces `undetermined`, which is the honest answer — do not supply a plausible
-date to avoid it.
+#### An evidence item is a ref
+
+Which artifact is evidence for a criterion is yours to decide. What that
+artifact *is* — a pull request or an issue, merged or open, and when it landed
+— the run already collected, so do not write it down beside the ref. The
+assembler joins it, for `evidence` and `refutingEvidence` alike:
+
+| You cite | Joined from | The date it carries |
+| --- | --- | --- |
+| `owner/repo#123` | the manifest entry — an epic, a child, a child's PR, or a declared dependency | `mergedAt` for a merged PR, `closedAt` for a closed issue, `createdAt` for anything still open |
+| `owner/repo@revision:path` | the source reads this run made | none — a read is dated by when you read it, which is not when the code landed |
+| anything else, a CI job name being the usual case | nothing; give it its own `kind`, normally `check` | whatever you state |
+
+A ref the manifest does not carry is **refused by name**. It is a typo, or it
+is work outside the traversal, and both need a person rather than a table
+cell. A source read you have not made is refused the same way — read it with
+`rollup.py source` first, or cite the artifact it came from.
+
+Stating `kind`, `state` or `at` yourself is allowed only where it matches what
+was collected. Anything else is refused rather than merged in either
+direction: a disagreement means either the ref is wrong or the manifest is not
+the document you thought you were reading, and quietly picking a winner hides
+both.
+
+`at` is why this is not left to transcription. The trend section classifies a
+changed assessment as implementation progress, newly discovered evidence, or
+undetermined by comparing these timestamps against the baseline's, so a merge
+time rounded to the minute flips a claim about *when work happened* and
+nothing downstream can notice. Evidence that carries no date — a source read,
+an artifact whose timestamps were not readable — produces `undetermined`,
+which is the honest answer.
 
 The assembler rejects `Evidence found` or `Partial evidence` with an empty
 `evidence` list, rejects any assessment string outside the four above, and

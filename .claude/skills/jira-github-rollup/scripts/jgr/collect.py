@@ -31,6 +31,12 @@ ISSUE_FIELDS = [
     "labels",
     "assignees",
     "url",
+    # When the issue came to be and when it stopped being open. Together they
+    # date it as evidence, which is what the trend section compares against
+    # the baseline - see `evidence.index`. `createdAt` is here rather than
+    # inferred because an open issue has no other honest date, and
+    # `updatedAt` moves when somebody comments.
+    "createdAt",
     "closedAt",
     "updatedAt",
 ]
@@ -56,6 +62,10 @@ PR_FIELDS = [
     # about evidence already counted, not a new piece of it.
     "mergeCommit",
     "reviewDecision",
+    # The date an unmerged PR carries as evidence; `mergedAt` is the date a
+    # merged one carries. Out of `_child_hash` for the same reason: when a
+    # PR was opened is a fact about evidence already counted.
+    "createdAt",
     "updatedAt",
 ]
 PR_EVIDENCE_FIELDS = ["files", "changedFiles", "closingIssuesReferences"]
@@ -357,6 +367,8 @@ class Collector:
                 "linkSource": epic.get("linkSource"),
                 "title": None,
                 "state": None,
+                "createdAt": None,
+                "closedAt": None,
                 "accessible": data is not None,
                 "childRefs": [],
             }
@@ -367,6 +379,10 @@ class Collector:
             repo, number = split_ref(ref)
             entry["title"] = data.get("title")
             entry["state"] = data.get("state")
+            # Recorded so an epic cited as evidence is dated from the same
+            # place a child or a PR is, rather than by hand.
+            entry["createdAt"] = data.get("createdAt")
+            entry["closedAt"] = data.get("closedAt")
             entry["bodyPath"] = self.cache.rel_for("issue", ref)
             entry["bodyHash"] = util.sha256(data.get("body") or "")
 
@@ -429,6 +445,7 @@ class Collector:
                 "title": None,
                 "state": None,
                 "stateReason": None,
+                "createdAt": None,
                 "closedAt": None,
                 "updatedAt": None,
                 "url": None,
@@ -453,6 +470,7 @@ class Collector:
                     # `gh` reports no reason as null; the empty string is its own
                     # bucket and must not be normalized to COMPLETED.
                     "stateReason": (data.get("stateReason") or "").upper(),
+                    "createdAt": data.get("createdAt"),
                     "closedAt": data.get("closedAt"),
                     "updatedAt": data.get("updatedAt"),
                     "url": data.get("url"),
@@ -488,6 +506,7 @@ class Collector:
                         "ref": pr_ref,
                         "accessible": True,
                         "state": state,
+                        "createdAt": pr_data.get("createdAt"),
                         "mergedAt": merged_at,
                         "mergeCommit": (pr_data.get("mergeCommit") or {}).get("oid"),
                         "baseRef": pr_data.get("baseRefName"),
@@ -513,6 +532,8 @@ class Collector:
                     "title": (data or {}).get("title"),
                     "state": ((data or {}).get("state") or "").upper() or None,
                     "stateReason": ((data or {}).get("stateReason") or "").upper() or None,
+                    "createdAt": (data or {}).get("createdAt"),
+                    "closedAt": (data or {}).get("closedAt"),
                 }
             )
 

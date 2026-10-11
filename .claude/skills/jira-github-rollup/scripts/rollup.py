@@ -307,7 +307,14 @@ def cmd_rerender(args):
             }
 
     result = assemble_mod.build(
-        assembly, write_snapshot=False, full_assessment_url=args.full_assessment_url
+        assembly,
+        write_snapshot=False,
+        full_assessment_url=args.full_assessment_url,
+        # The stored evidence was joined to the manifest when the assessment
+        # was made. The manifest above is rebuilt from the snapshot and carries
+        # less than the one it was joined against, so re-deriving here would
+        # re-judge a reviewed document from a thinner record of the world.
+        resolve_evidence=False,
     )
     result["renderedFrom"] = args.snapshot
     _emit_outputs(result, args)

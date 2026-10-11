@@ -320,9 +320,14 @@ covers it, and is written only when asked for. It is never printed: a quarter
 of a megabyte of markup on stdout is exactly the kind of raw payload the cache
 exists to keep out of the conversation.
 
-Six ways this command refuses rather than emitting something wrong:
+Seven ways this command refuses rather than emitting something wrong:
 
 - A requirement with no fresh and no reusable assessment. It will not invent one.
+- An evidence ref that resolves to nothing — not in the manifest, or a source
+  read this run did not make — or one whose supplied `kind`, `state` or `at`
+  disagrees with what was collected. The three fields are joined from the
+  manifest and the source-read ledger, so a cited ref either names something
+  the run holds or names a mistake; see `references/requirements.md`.
 - An `Evidence found` carrying a non-empty `unresolvedClauses` or
   `uncoveredClauses`. `Evidence found` claims every clause of the criterion
   holds; an open clause makes it `Partial evidence`.
@@ -385,6 +390,11 @@ Use it to regenerate a report after a rendering change, or to see what a past
 run would look like under the current renderer. It cannot change an outcome: a
 snapshot written before a rule existed is re-rendered under the old judgements,
 which is the point.
+
+Evidence is not re-joined here. The stored items were resolved against the
+manifest of the run that made them; the manifest reconstructed from a snapshot
+is thinner than that one, so re-deriving would re-judge a reviewed document
+against a poorer record of the world.
 
 The prose comes back with it. A snapshot stores `summaryNarrative` (the full
 assessment's Summary paragraph) and `narrative` (the Jira summary's bullet
@@ -531,6 +541,10 @@ rules changed, when a previous run was wrong, or when the user asks for one.
 | `traversalComplete: false` | A cap was hit or a call failed | `traversalNotes` says which. Every absence claim is weaker; say so in the Summary |
 | `diff` reports `hashesUnavailable` | A schema v1 baseline | Everything is reassessed this run. Expected once per issue after the upgrade |
 | `assemble` errors `no assessment supplied or reusable` | A requirement has no verdict | Assess it. The assembler will not invent one |
+| `assemble` errors `is not an artifact this run traversed` | A cited ref the manifest does not carry | A typo, or work outside the traversal. Cite a ref from the manifest, or name the missing link in the gap — do not re-type the ref with fields attached |
+| `assemble` errors `names a source read this run did not make` | A `repo@revision:path` ref cited without reading it | Read it with `source`, or cite the artifact the path came from |
+| `assemble` errors `but what was collected says` | A supplied `kind`, `state` or `at` disagreeing with the manifest | Delete the field. The assembler joins all three; a hand-typed timestamp is the one that is wrong |
+| `assemble` errors `nothing collected this run describes it` | An evidence item that is neither a ref nor a source read | Give it a `kind` — `check` for a CI job — or correct the ref |
 | `assemble` errors on an assessment string | Not one of the four | Use the exact wording from `references/requirements.md` |
 | `assemble` errors `claims every clause of the criterion holds` | `Evidence found` with a clause left open | Assess it `Partial evidence` and keep the clause listed. Do not empty the list to get past the error — the list is the finding |
 | `assemble` errors `confirmed-unmet declared with nothing cited` | Absence was reported as refutation | Drop the `outcome` field. Absence of evidence is `unverified`, and the count is the same either way |
